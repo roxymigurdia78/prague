@@ -1,0 +1,16 @@
+{
+  "schema": "blender_multiple_scattering/v1",
+  "angle_unit": "degrees",
+  "altitude_unit": "meters",
+  "parameters": {
+    "sun_disc": true,
+    "sun_size": 0.545,
+    "sun_intensity": 1.0,
+    "sun_elevation": 15.0,
+    "sun_rotation": 0.0,
+    "altitude": 100.0,
+    "air": 1.0,
+    "aerosols": 1.0,
+    "ozone": 1.0
+  }
+}

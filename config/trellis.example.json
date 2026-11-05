@@ -1,0 +1,13 @@
+{
+  "vision_model": "",
+  "hpc_base_url": "",
+  "hpc_env_file": "",
+  "image_model": "gpt-image-2",
+  "quality": "high",
+  "size": "1024x1024",
+  "background": "white",
+  "settle_seconds": 15,
+  "poll_seconds": 2,
+  "target_hint": "",
+  "include_frame": true
+}

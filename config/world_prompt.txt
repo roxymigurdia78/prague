@@ -1,0 +1,11 @@
+Photorealistic eye-level view of a narrow, winding medieval street in
+Prague's Old Town. Uneven cobblestone pavement, tall gothic and
+romanesque stone houses with weathered plaster facades in muted pastel
+tones, small arched doorways with heavy wooden doors, wrought-iron
+balconies and hanging shop signs, unlit street lanterns, stone arcades.
+Rich fine detail: worn stone textures, cracks, moss between the
+cobblestones, aged wood grain. Immersive, as if standing in the street.
+No people, no cars.
+Lighting: flat, uniform, overcast diffuse light, no direct sunlight,
+no cast shadows, no specular highlights, no bloom, no color grading,
+neutral white balance, evenly lit everywhere.
