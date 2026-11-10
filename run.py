@@ -8,9 +8,19 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "src"))
 
 COMMANDS = {
+    "build": ("build_world", "プロンプトからGLB・清掃・地点/大気・窓/街灯検出・初期Blenderまで一括実行"),
+    "conversation-build": ("conversation_build", "Windowsの会話.jsonからHPCでプロンプトを作り、初期Blenderまで一括実行"),
+    "roads": ("roads.explore_world", "HPCで道路を認識し、分岐探索・歩行経路・撮影計画を作成"),
+    "conversation": ("conversation", "会話JSONをHPCで抽出（世界・季節・時間帯・地名）し、地点・日時・Blender条件へ接続／受信"),
+    "atmosphere": ("atmosphere_reference", "CAMS EAC4のAOD550・オゾン全量を取得"),
+    "weather": ("weather_reference", "既定2025年の気象を取得・過去20年にも対応"),
+    "time": ("time_selection", "日の出・日没に合わせて時刻を選択"),
+    "date": ("date_selection", "季節・月から日付を選択"),
+    "location": ("geocoding", "地名から座標・標高・タイムゾーンを検索"),
     "world": ("world", "Marbleの世界を生成・取得"),
     "credits": ("world_api", "World Labsの残高を確認"),
     "prepare": ("prepare_world", "GLBの空・破片を清掃"),
+    "capture": ("capture_world", "清掃・暗所化済みの街をCAMSの空と道路視点で撮影"),
     "map": ("scene_inventory", "窓・器具の位置を記録"),
     "sky-cleanup": ("sky_cleanup", "空の領域を検出・分離"),
     "sky-polish": ("sky_cleanup_polish", "残った空・破片を清掃"),

@@ -1,0 +1,17 @@
+{
+  "default_location": {
+    "name": "Prague",
+    "latitude": 50.08804,
+    "longitude": 14.42076,
+    "elevation": 202.0,
+    "timezone": "Europe/Prague",
+    "source": "Open-Meteo Geocoding / GeoNames",
+    "source_url": "https://open-meteo.com/en/docs/geocoding-api",
+    "license": "CC BY 4.0"
+  },
+  "early_morning_minutes": 60,
+  "noon_half_width_minutes": 90,
+  "evening_minutes": 60,
+  "deep_night_start_hour": 22,
+  "deep_night_end_hour": 4
+}

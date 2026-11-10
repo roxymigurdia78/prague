@@ -142,8 +142,11 @@ def connected_sky(rgb, points, tolerance=0.08, adaptive=False):
         if adaptive:
             chroma = rgb-rgb.mean(axis=-1,keepdims=True)
             reference_chroma = reference-reference.mean()
-            match |= ((np.linalg.norm(chroma-reference_chroma,axis=-1) <= .07) &
-                      (rgb.mean(axis=-1) >= max(.12,reference.mean()*.55)))
+            # Beige/gray plaster can have almost the sky's chroma but be much
+            # darker. Do not let gradual region growth turn a roofline into a
+            # bridge across an entire building facade.
+            match |= ((np.linalg.norm(chroma-reference_chroma,axis=-1) <= .035) &
+                      (rgb.mean(axis=-1) >= max(.12,reference.mean()*.8)))
         allowed |= match
     result = np.zeros_like(allowed)
     if adaptive:
@@ -180,6 +183,13 @@ def polygon_sky_mask(shape, polygons):
             inside ^= ((ay > py) != (by > py)) & (px < (bx-ax) * (py-ay) / (by-ay) + ax)
         result |= inside
     return result
+
+
+def cleanup_fingerprint(config, analysis, protection):
+    polygons={v['id']:v.get('protected_polygons',[]) for v in protection.get('views',[])
+              if v.get('protected_polygons')}
+    payload={'config':config,'analysis':analysis,'protection':polygons,'algorithm':'hpc-protected-native-pixels-20261110-v9'}
+    return hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).hexdigest()
 
 
 def filter_sky_points(images, views):
@@ -277,10 +287,27 @@ def close_sky_mask(mask, radius=2):
     return closed
 
 
-def refine_cut_boundary(xyz,triangles,removed,minimum_z,maximum_move,iterations=3):
+def bounded_speck_selection(candidates,first_visible,face_count,maximum_fraction=.005):
+    """Fall back to visible fragments when resolving their back layers grows too far."""
+    proposed=set(candidates)
+    visible=proposed&set(first_visible)
+    limit=int(face_count*maximum_fraction)
+    if len(proposed)<=limit:
+        kept=proposed;mode='full'
+    elif visible and len(visible)<=limit:
+        kept=visible;mode='visible_only'
+    else:
+        kept=set();mode='kept_original'
+    return kept,{'mode':mode,'candidate_faces':len(proposed),'visible_faces':len(visible),
+        'limit_faces':limit,'selected_faces':len(kept)}
+
+
+def refine_cut_boundary(xyz,triangles,removed,minimum_z,maximum_move,iterations=3,*,preserve_geometry=False):
     """Smooth only new cut edges, with welded UV seams and a strict displacement cap."""
     import numpy as np
     xyz=np.asarray(xyz)
+    if preserve_geometry:
+        return xyz.copy(),{'vertices':0,'maximum_displacement':0.0,'preserved_for_building_protection':True}
     precision=max(maximum_move*.002,1e-7)
     _,first,welded=np.unique(np.round(xyz/precision).astype(np.int64),axis=0,return_index=True,return_inverse=True)
     upper=(xyz[triangles][:,:,2].min(axis=1)>=minimum_z)
@@ -319,10 +346,12 @@ def refine_cut_boundary(xyz,triangles,removed,minimum_z,maximum_move,iterations=
     return output,{"vertices":int((displacement>1e-8).sum()),"maximum_displacement":float(displacement.max(initial=0))}
 
 
-def refine_open_boundary(xyz,triangles,minimum_z,maximum_move,iterations=12):
+def refine_open_boundary(xyz,triangles,minimum_z,maximum_move,iterations=12,*,preserve_geometry=False):
     """Regularize existing exposed upper edges too; never smooth interior vertices."""
     import numpy as np
     xyz=np.asarray(xyz)
+    if preserve_geometry:
+        return xyz.copy(),{'vertices':0,'maximum_displacement':0.0,'preserved_for_building_protection':True}
     precision=max(maximum_move*.002,1e-7)
     _,first,welded=np.unique(np.round(xyz/precision).astype(np.int64),axis=0,return_index=True,return_inverse=True)
     faces=welded[triangles]
@@ -529,8 +558,20 @@ def main(argv=None):
         if backend.get("model") and backend["model"] != args.model:
             raise ValueError("保存済みの分析モデルが異なります。--reuse-viewsで新しい分析を作成してください。")
         parse_analysis(analysis_path.read_text(encoding="utf-8"), [v["id"] for v in manifest["views"]])
-    print("空の色と高さで候補を絞り、コピーを作成しています…", flush=True)
-    run_blender(blender, "apply", output)
+    protection_path=output/'sky_protection_review.json'
+    protection=json.loads(protection_path.read_text(encoding='utf-8')) if protection_path.exists() else {'views':[]}
+    if any(v.get('protected_polygons') for v in protection['views']):
+        from streetlab.sky_semantics import ensure
+        ensure(output)
+    fingerprint=cleanup_fingerprint(config,json.loads(analysis_path.read_text(encoding='utf-8')),protection)
+    cached=json.loads((output/'report.json').read_text(encoding='utf-8')) if (output/'report.json').exists() else {}
+    complete=all((output/name).is_file() for name in ('sky_review.blend','street_without_sky.glb')) and all(
+        (output/(v['id']+'_after.png')).is_file() for v in manifest['views'])
+    if cached.get('cleanup_fingerprint')==fingerprint and complete:
+        print('同じ保護範囲・分析で完了した空除去結果を再利用します。',flush=True)
+    else:
+        print("空の色と高さで候補を絞り、コピーを作成しています…", flush=True)
+        run_blender(blender, "apply", output)
     report = json.loads((output / "report.json").read_text(encoding="utf-8"))
     print(f"上側の候補: {report['selected_faces']:,} / {report['total_faces']:,} 面", flush=True)
     print("確認用: sky_review.blend / 結果: street_without_sky.glb / 比較: view_00.png, view_00_after.png, view_00_overlay.png", flush=True)

@@ -1,0 +1,34 @@
+{
+  "prompt_file": "config/world_prompt.txt",
+  "model": "marble-1.1",
+  "place": null,
+  "country": null,
+  "date": "2026-07-15",
+  "time": "12:00",
+  "fold": null,
+  "reference_year": 2025,
+  "datetime_from_prompt": true,
+  "weather_enabled": true,
+  "width": 768,
+  "height": 576,
+  "samples": 16,
+  "exposure": -2.0,
+  "view_transform": "AgX",
+  "capture_enabled": false,
+  "inventory": {
+    "enabled": true,
+    "rounds": 2,
+    "views_per_position": 8
+  },
+  "roads": {
+    "enabled": false,
+    "eye": 0.7,
+    "step": 0.2,
+    "spacing": 0.55,
+    "rounds": 2,
+    "stations": 2,
+    "panoramas": 12,
+    "width": 2048,
+    "height": 1024
+  }
+}

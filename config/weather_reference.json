@@ -1,0 +1,6 @@
+{
+  "endpoint": "https://archive-api.open-meteo.com/v1/archive",
+  "usage": "non-commercial",
+  "model": "era5",
+  "default_reference_year": 2025
+}

@@ -29,26 +29,49 @@ Include every supplied image ID exactly once, even if objects is empty.
 This is localization only. Do not propose lighting, brightness or material changes."""
 
 
+def _check_object(o):
+    if not isinstance(o,dict):raise ValueError('物体の形式が不正です')
+    if o.get('kind') not in {'window','lantern','streetlight','sun'} or o.get('appearance') not in {'dark','reflective','lit','unknown'}:
+        raise ValueError('物体分類が不正です')
+    for k,n in [('center',2),('bbox',4)]:
+        a=o.get(k)
+        if not isinstance(a,list) or len(a)!=n or any(type(x) is not int or not 0<=x<=1000 for x in a):raise ValueError('座標が不正です')
+    x,y=o['center'];a,b,c,d=o['bbox']
+    if a>=c or b>=d:raise ValueError('範囲が不正です')
+    if not a<=x<=c or not b<=y<=d:
+        o['reported_center']=o['center'];o['center']=[(a+c)//2,(b+d)//2]
+        o['center_adjustment']='bbox_midpoint_due_to_inconsistent_reported_center'
+    s=o.get('confidence',.7)
+    if 'confidence' not in o:o['confidence']=.7;o['confidence_source']='conservative_default_not_model_score'
+    if type(s) not in (int,float) or not math.isfinite(s) or not 0<=s<=1:raise ValueError('信頼度が不正です')
+    return o
+
+
 def parse_inventory(raw, ids):
-    data=parse_json(raw);views=data.get('views')
+    data=parse_json(raw)
+    # The VLM sometimes returns the bare views array instead of {"views": [...]}.
+    if isinstance(data,list):data={'views':data}
+    if not isinstance(data,dict):raise ValueError('応答の形式が不正です')
+    views=data.get('views')
     if not isinstance(views,list) or any(not isinstance(v,dict) for v in views) or sorted(v.get('id','') for v in views)!=sorted(ids):
         raise ValueError('視点が不足または重複しています')
     for v in views:
-        if not isinstance(v.get('objects'),list) or len(v['objects'])>35:raise ValueError('対象数が不正です')
+        if not isinstance(v.get('objects'),list):raise ValueError('対象数が不正です')
+        kept=[];dropped=0
         for o in v['objects']:
-            if o.get('kind') not in {'window','lantern','streetlight','sun'} or o.get('appearance') not in {'dark','reflective','lit','unknown'}:
-                raise ValueError('物体分類が不正です')
-            for k,n in [('center',2),('bbox',4)]:
-                a=o.get(k)
-                if not isinstance(a,list) or len(a)!=n or any(type(x) is not int or not 0<=x<=1000 for x in a):raise ValueError('座標が不正です')
-            x,y=o['center'];a,b,c,d=o['bbox']
-            if a>=c or b>=d:raise ValueError('範囲が不正です')
-            if not a<=x<=c or not b<=y<=d:
-                o['reported_center']=o['center'];o['center']=[(a+c)//2,(b+d)//2]
-                o['center_adjustment']='bbox_midpoint_due_to_inconsistent_reported_center'
-            s=o.get('confidence',.7)
-            if 'confidence' not in o:o['confidence']=.7;o['confidence_source']='conservative_default_not_model_score'
-            if type(s) not in (int,float) or not math.isfinite(s) or not 0<=s<=1:raise ValueError('信頼度が不正です')
+            try:
+                kept.append(_check_object(o))
+            except (ValueError,TypeError,AttributeError,KeyError):
+                # One malformed detection (e.g. "kind": [x, y]) should not discard
+                # the whole view or stop the build; drop only that object.
+                dropped+=1
+        if len(kept)>35:
+            # Dense facades can exceed the requested cap; keep the most confident
+            # 35 instead of failing the whole build.
+            v['truncated_objects']=len(kept)-35
+            kept=sorted(kept,key=lambda o:-o['confidence'])[:35]
+        v['objects']=kept
+        if dropped:v['dropped_invalid_objects']=dropped
     return data
 
 
@@ -121,6 +144,7 @@ def main(argv=None):
     p=argparse.ArgumentParser(description='窓・街灯・ランタンの場所と範囲だけを記録します。発光・材質変更なし。')
     p.add_argument('input',nargs='?',type=Path)
     p.add_argument('--continue-dir',type=Path)
+    p.add_argument('--output',type=Path,help='新しい検出結果の保存先')
     p.add_argument('--reuse-scans',type=Path,help='同じ入力・撮影設定の過去の画像だけ再利用')
     p.add_argument('--rounds',type=int,default=2)
     p.add_argument('--views-per-position',type=int,default=8)
@@ -129,6 +153,7 @@ def main(argv=None):
     p.add_argument('--prepare-only',action='store_true')
     p.add_argument('--rebuild',action='store_true',help='保存済み検出から位置・範囲だけ再計算。HPC呼び出しなし')
     args=p.parse_args(argv)
+    if args.output and args.continue_dir:p.error('--outputと--continue-dirは同時に使えません')
     if args.rebuild and (not args.continue_dir or args.prepare_only):p.error('--rebuildは--continue-dirと使ってください')
     if not 1<=args.rounds<=4 or not 4<=args.views_per_position<=16:p.error('周回1〜4、方向数4〜16')
     if args.continue_dir:
@@ -143,7 +168,9 @@ def main(argv=None):
         source=source.resolve()
         if source.is_dir():source=source/'street_relight.blend'
         if not source.is_file() or source.suffix.lower()!='.blend':p.error('準備済みstreet_relight.blendを指定してください')
-        output=ROOT/'outputs'/'scene_inventory'/datetime.now().strftime('%Y%m%d_%H%M%S_%f');output.mkdir(parents=True)
+        output=args.output.resolve() if args.output else ROOT/'outputs'/'scene_inventory'/datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        if (output/'job.json').exists():p.error('既存の検出結果には--continue-dirを使ってください')
+        output.mkdir(parents=True,exist_ok=True)
         job={'source':str(source),'sha256':hashlib.sha256(source.read_bytes()).hexdigest(),
              'rounds':args.rounds,'views_per_position':args.views_per_position,'model':args.model,
              'task':'semantic_inventory','version':1}

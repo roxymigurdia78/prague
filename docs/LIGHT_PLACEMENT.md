@@ -3,6 +3,8 @@
 目的は「どこに何があるか」を記録し、後工程から同じ位置・範囲を使えるようにすることです。
 ライト・発光面・反射材質は追加しません。窓は暗い窓、反射している窓、室内光のある窓をすべて対象にします。
 
+現在は `python run.py build` からも既定でこの検出を呼びます。一括実行では `outputs/builds/日時/inventory/` に結果を保存し、`street_initial.blend` にEMPTYマーカーを読み込みます。太陽・空と検出結果を持つ初期状態まで自動実行し、本撮影は `--with-capture` を指定した場合だけ追加します。普段の手順は [実行メモ](../実行メモ.txt) を参照してください。
+
 ```powershell
 python -X utf8 run.py map
 python -X utf8 run.py map "準備済みのstreet_relight.blend"

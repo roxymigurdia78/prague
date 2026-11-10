@@ -15,9 +15,12 @@ scene=bpy.context.scene
 original_world=scene.world
 objects={o.name:(o.type,tuple(float(v) for row in o.matrix_world for v in row)) for o in scene.objects}
 material_nodes={m.name:len(m.node_tree.nodes) for m in bpy.data.materials if m.use_nodes}
-original_exposure=scene.view_settings.exposure
+scene.view_settings.exposure=2.0
 original_engine=scene.render.engine
 settings=set_sky(sun_elevation=20, sun_rotation=45, aerosols=1.5)
+assert scene.view_settings.exposure==0.0
+original_exposure=-1.25
+scene.view_settings.exposure=original_exposure
 world=scene.world
 assert world!=original_world
 assert original_world.node_tree.nodes.get('Background') is not None
@@ -74,7 +77,8 @@ difference=sum(abs(a-b) for i,(a,b) in enumerate(zip(day,low)) if i%4!=3)/(len(d
 assert difference>.001,difference
 result={'blender':bpy.app.version_string,'repeated_update':True,'single_sky_node':True,
         'degree_conversion':True,'json_restore':True,'invalid_update_is_atomic':True,
-        'shared_world_isolation':True,'objects_and_materials_unchanged':True,'exposure_unchanged':True,
+        'shared_world_isolation':True,'objects_and_materials_unchanged':True,
+        'initial_exposure_zero':True,'updates_preserve_exposure':True,
         'existing_world_unchanged':True,'street_files_opened_or_modified':False,
         'boundary_angles':True,'cycles_shader_rendered':True,'sun_change_pixel_difference':difference,
         'values':get_sky_settings().to_dict()}
