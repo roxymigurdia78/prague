@@ -2,6 +2,7 @@ import json
 import sys
 from pathlib import Path
 
+print("HPC Python START: importing Mask2Former dependencies", file=sys.stderr, flush=True)
 import numpy as np
 import torch
 from PIL import Image
@@ -65,6 +66,7 @@ def detect(image_path, output_dir, processor, model, device):
 
 def main():
     source = Path(sys.argv[1])
+    print("Mask2Former: loading processor and model", file=sys.stderr, flush=True)
     processor = AutoImageProcessor.from_pretrained(MODEL_ID, use_fast=False)
     model = Mask2FormerForUniversalSegmentation.from_pretrained(
         MODEL_ID, use_safetensors=True
@@ -97,7 +99,9 @@ def main():
 
     if source.is_dir():
         for image_path in sorted(source.glob("*.png")):
+            print(f"Mask2Former image START: {image_path.name}", file=sys.stderr, flush=True)
             run(image_path, source.parent / "output" / image_path.stem)
+            print(f"Mask2Former image END: {image_path.name}", file=sys.stderr, flush=True)
     else:
         run(source, source.parent)
 

@@ -180,7 +180,8 @@ class ReviewTests(unittest.TestCase):
                     patch('streetlab.sky_cleanup_review.review',side_effect=[1,1,0,0]) as review, \
                     patch.object(prepare_world.sky_cleanup_polish,'main',return_value=polished) as polish, \
                     redirect_stdout(io.StringIO()):
-                self.assertEqual(prepare_world.main([str(folder/'source.glb')]),polished)
+                with patch.object(prepare_world.sky_residual_loop,'run',side_effect=lambda folder,**_kwargs:folder):
+                    self.assertEqual(prepare_world.main([str(folder/'source.glb')]),polished)
             self.assertEqual(clean.call_count,3)
             self.assertEqual(review.call_count,4)
             polish.assert_called_once()

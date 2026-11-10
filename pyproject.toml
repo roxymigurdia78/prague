@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Marble street-world and Blender lighting research tools"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["numpy", "Pillow", "scipy", "openai", "tzdata"]
+dependencies = ["numpy", "Pillow", "scipy", "openai", "tzdata", "opencv-python-headless"]
 
 [project.optional-dependencies]
 atmosphere = ["cdsapi>=0.7.7,<0.8", "ecmwf-datastores-client>=0.6,<0.7", "netCDF4>=1.7,<2"]

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from streetlab import sky_cleanup
 from streetlab import sky_cleanup_polish
+from streetlab import sky_residual_loop
 from streetlab.cleanup_convergence import Progress,load_policy,geometry,read,save,REASONS,legacy_reviews
 
 
@@ -97,6 +98,11 @@ def main(argv=None):
             reason=rebuild()
             if reason or progress.exhausted:
                 output=finish_base(reason or 'max_reviews');break
+    if not args.cleaned_dir:
+        output=sky_residual_loop.run(output,model=args.model,env_file=args.env_file)
+        prepared_state=read(state)
+        prepared_state.update(polished=str(output),residual_cleanup=sky_residual_loop.summary(output))
+        save(state,prepared_state)
     print('完了。照明を置くファイル: '+str(output/'street_relight.blend'),flush=True)
     print('GLB: '+str(output/'street_relight.glb'),flush=True)
     return output

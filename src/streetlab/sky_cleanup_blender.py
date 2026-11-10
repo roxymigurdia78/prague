@@ -87,7 +87,7 @@ def ensure_protected_owners(region_views,trees):
     return getattr(region_views,'protected_faces',{})
 
 
-def visible_sky_faces(obj,indices,xyz,eligible,region_views,trees,allow_surrounded=True,require_consensus=True,reference_trees=None,maximum_depth=None):
+def visible_sky_faces(obj,indices,xyz,eligible,region_views,trees,allow_surrounded=True,require_consensus=True,reference_trees=None,maximum_depth=None,minimum_positive_views=1):
     candidates=np.flatnonzero(eligible)
     selected=np.zeros_like(eligible)
     if not len(candidates):
@@ -126,6 +126,8 @@ def visible_sky_faces(obj,indices,xyz,eligible,region_views,trees,allow_surround
         py=np.clip(((1-sn[:,:,1])*.5*h).astype(int),0,h-1)
         inside=(sc[:,:,3]>0)&(np.abs(sn)<1).all(axis=2)&region[py,px]
         coverage=inside.mean(axis=1)
+        building_mask=getattr(region_views,'negative_masks',{}).get(camera.name)
+        building_coverage=building_mask[py,px].mean(axis=1) if building_mask is not None else None
         protection=getattr(region_views,'protected',{}).get(camera.name)
         protected_overlap=np.zeros(len(candidates),dtype=bool)
         if protection is not None and protection.any():
@@ -158,9 +160,9 @@ def visible_sky_faces(obj,indices,xyz,eligible,region_views,trees,allow_surround
                           ((-1,-1),(0,-1),(1,-1),(-1,0),(1,0),(-1,1),(0,1),(1,1))]
                     if all(0<=x<w and 0<=y<h and region[y,x] for x,y in ring):
                         surrounded[row]+=1
-                elif coverage[row]<=.15:
+                elif coverage[row]<=.15 and (building_coverage is None or building_coverage[row]>=.5):
                     negative[row]+=1
-    selected[candidates]=(positive>0)&((positive>=2*negative)|((surrounded>0)&allow_surrounded)|(not require_consensus))&~protected
+    selected[candidates]=(positive>=minimum_positive_views)&((positive>=2*negative)|((surrounded>0)&allow_surrounded)|(not require_consensus))&~protected
     return selected
 
 

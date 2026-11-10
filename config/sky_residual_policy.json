@@ -1,0 +1,5 @@
+{
+  "max_rounds": 6,
+  "stable_rounds": 2,
+  "small_face_fraction": 0.0005
+}

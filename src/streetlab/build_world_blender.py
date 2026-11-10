@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from streetlab.sun_sky import set_sun, set_sky, get_sky_settings, save_sky_settings
 from streetlab.atmosphere_mapping import initial_atmosphere
 from streetlab.render_views import render_views
+from streetlab.blender_presentation import configure_gpu, configure_opening_view
 
 
 def read(path):
@@ -31,7 +32,9 @@ def main(request_file):
     bpy.ops.wm.open_mainfile(filepath=str(source))
     scene = bpy.context.scene
     assert not bpy.data.lights and not bpy.data.cameras
-    assert scene.world.node_tree.nodes['Background'].inputs['Strength'].default_value == 0
+    background=next(n for n in scene.world.node_tree.nodes if n.type=='BACKGROUND')
+    assert background.inputs['Strength'].default_value == 0
+    background.name='Background'
     for material in bpy.data.materials:
         if material.users:
             output = next(n for n in material.node_tree.nodes if n.type == 'OUTPUT_MATERIAL' and n.is_active_output)
@@ -73,6 +76,12 @@ def main(request_file):
         if len(target.objects)!=len(ids):
             raise ValueError('検出結果のマーカーがそろっていません。')
     scene.render.engine = 'CYCLES'
+    scene.cycles.samples=int(request.get('samples',16))
+    scene.cycles.use_denoising=True
+    scene.cycles.preview_samples=64
+    scene.cycles.use_preview_denoising=True
+    render_device = configure_gpu(scene)
+    configure_opening_view(scene, read(prepared/'views.json')['camera_position'])
     scene['streetlab_location'] = json.dumps(location, ensure_ascii=False)
     scene['streetlab_initial_conditions'] = json.dumps({'sun': sun, 'atmosphere': mapping}, ensure_ascii=False)
     save_sky_settings(folder / 'initial_sky.json', scene)
@@ -136,6 +145,8 @@ def main(request_file):
         camera_record['semantic_inventory']=inventory_file
         (folder/'camera.json').write_text(json.dumps(camera_record,indent=2),encoding='utf-8')
     settings = None
+    residual_summary=next((read(p) for p in (prepared/'sky_residual_status.json',
+        prepared/'residual_loop/status.json') if p.exists()),None)
     if request.get('capture_enabled',True):
         settings = render_views({'sun': sun_options, 'sky': {'sun_disc': sun_disc, 'altitude': altitude},
         'atmosphere_reference': atmosphere_file, 'width': request['width'], 'height': request['height'],
@@ -148,6 +159,8 @@ def main(request_file):
         'location': location, 'sun': sun, 'sky': applied, 'atmosphere_reference': mapping,
         'reference_file': str(atmosphere_file), 'faces': faces,
         'initial_scene_verified_after_reload': True, 'cameras_saved': 0, 'lights_saved': 0,
+        'render_device':render_device,'opening_view':'RENDERED','detection_markers_hidden':True,
+        'sky_residual_cleanup':residual_summary,
         'capture_plan':request.get('capture_plan'),
         'inventory_file':inventory_file,'inventory_blend':request.get('inventory_blend'),
         'inventory_summary':{'windows':sum(obj['kind']=='window' for obj in inventory['objects']),

@@ -188,19 +188,73 @@ def run_inventory(folder,prepared,config):
 
 
 def show_result(result):
+    residual=result.get('sky_residual_cleanup')
+    if residual:
+        from streetlab.sky_residual_loop import REASONS as residual_reasons
+        print('空の線・面:',residual_reasons.get(residual['termination_reason'],residual['termination_reason']),
+              '（残骸の確認が必要）' if residual.get('needs_review') else '',flush=True)
     summary=result.get('cleanup_summary')
     if summary:
         from streetlab.cleanup_convergence import REASONS
         print('清掃の終了理由:',REASONS.get(summary.get('termination_reason'),summary.get('termination_reason')),
             '確認'+str(summary.get('reviews_completed'))+'回',flush=True)
     print('照明ゼロ:',result['dark_blend'],flush=True)
-    print('大気を反映した初期状態:',result['initial_blend'],flush=True)
+    print('大気を反映した初期状態:',result.get('preferred_initial_blend',result['initial_blend']),flush=True)
     if result.get('inventory_file'):
         print('窓・街灯・ランタンの検出結果:',result['inventory_file'],flush=True)
     if result.get('render_settings'):
         print('画像と設定:',result['render_settings'],flush=True)
     else:
         print('撮影は省略しました。カメラ位置の土台はcamera.jsonに保存しています。',flush=True)
+
+
+def refine_existing_build(folder):
+    """Repair the saved world's sky and publish a new initial file, preserving originals."""
+    from streetlab import sky_residual_loop
+    job=read(folder/'build.json')
+    source=Path(job['config']['world_dir'])/'street_textured.glb'
+    if not valid_local_glb(source) or not (folder/'initialize_request.json').exists():
+        raise ValueError('既存のGLB・初期設定が必要です。先に通常のbuild --resumeを実行してください。')
+    checkpoint,prepared=cleanup_state(source)
+    if prepared is None:raise ValueError('保存済みの清掃結果が見つかりません。')
+    print('保存済みWorldの空を再清掃します。World APIは呼びません。',flush=True)
+    prepared=sky_residual_loop.run(prepared)
+    revision=folder/'sky_revisions'/datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+    revision.mkdir(parents=True)
+    request=read(folder/'initialize_request.json')
+    request.update(output=str(revision),prepared_dir=str(prepared),capture_enabled=False)
+    request.pop('capture_plan',None);request.pop('capture_source',None)
+    save(revision/'initialize_request.json',request)
+    with (revision/'initialize.log').open('w',encoding='utf-8') as log:
+        completed=subprocess.run([str(find_blender()),'--background','--disable-autoexec','--factory-startup',
+            '--python-exit-code','1','--python',str(CODE_DIR/'build_world_blender.py'),'--',
+            str(revision/'initialize_request.json')],stdin=subprocess.DEVNULL,stdout=log,
+            stderr=subprocess.STDOUT,timeout=300)
+    if completed.returncode:raise RuntimeError('空の修正版の初期化で停止しました: '+str(revision/'initialize.log'))
+    result=read(revision/'result.json')
+    previous=read(folder/'result.json') if (folder/'result.json').exists() else None
+    if previous:save(revision/'previous_result.json',previous)
+    # Geometry coordinates/floor did not move. Preserve the previously verified
+    # road camera pose instead of replacing it with a generic inspection pose.
+    if (folder/'camera.json').exists():
+        camera=read(folder/'camera.json')
+        camera.update(source_blend=result['initial_blend'],
+            compatible_blends=[result['initial_blend'],result['dark_blend']])
+        save(revision/'camera.json',camera)
+        if previous:result['camera_plan_views']=previous.get('camera_plan_views',result['camera_plan_views'])
+    result.update(sky_revision=str(revision),previous_result=str(revision/'previous_result.json') if previous else None)
+    save(revision/'result.json',result)
+    save(folder/'result.json',result)
+    if checkpoint and (checkpoint/'preparation.json').exists():
+        state=read(checkpoint/'preparation.json')
+        state.update(polished=str(prepared),residual_cleanup=sky_residual_loop.summary(prepared))
+        save(checkpoint/'preparation.json',state)
+    job.update(status='complete',result=result,prepared_dir=str(prepared),sky_revision=str(revision))
+    capture_mode(job['config'],False)
+    save(folder/'build.json',job)
+    print('以前のBlenderと写真は保持し、空の修正版を別ファイルで保存しました。',flush=True)
+    show_result(result)
+    return folder
 
 
 def resolve_scene_time(config, location, folder):
@@ -309,6 +363,15 @@ def execute(folder):
             if checkpoint:
                 options += ['--continue-dir', str(checkpoint)]
             polished = prepare_world.main(options)
+        # Cached cap removal must not bypass the separately bounded line/sheet
+        # detection loop when resuming an older unfinished build.
+        from streetlab import sky_residual_loop
+        stage('sky_line_detection_and_cleanup')
+        polished=sky_residual_loop.run(polished)
+        if checkpoint and (checkpoint/'preparation.json').exists():
+            prepared_state=read(checkpoint/'preparation.json')
+            prepared_state.update(polished=str(polished),residual_cleanup=sky_residual_loop.summary(polished))
+            save(checkpoint/'preparation.json',prepared_state)
         inventory=None
         if config.get('inventory',{}).get('enabled'):
             stage('detecting_windows_and_fixtures',prepared_dir=str(polished))
@@ -397,7 +460,9 @@ def main(argv=None):
     mode=parser.add_mutually_exclusive_group()
     mode.add_argument('--initialize-only',action='store_true',help='道路探索・本撮影を省き、初期Blenderとカメラ位置の土台まで保存')
     mode.add_argument('--with-capture',action='store_true',help='道路探索と本撮影も実行。初期状態だけの既存世界にも追加できる')
+    mode.add_argument('--refine-sky',action='store_true',help='既存世界の空を再清掃し、元を残して初期Blenderの修正版を作成')
     args = parser.parse_args(argv)
+    if args.refine_sky and not args.resume:parser.error('--refine-skyには--resumeを指定してください。')
     config = read(ROOT / 'config/build_world.json')
     requested_capture=False if args.initialize_only else True if args.with_capture else None
     if requested_capture is not None:
@@ -457,6 +522,7 @@ def main(argv=None):
             print('保存済みのプロンプト・地点・日時で再開します。', flush=True)
         print('一括実行の保存先:', folder, flush=True)
         with pinned_world_key():
+            if args.refine_sky:return refine_existing_build(folder)
             return execute(folder)
 
 

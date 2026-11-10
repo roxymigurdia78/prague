@@ -60,6 +60,39 @@ class BlenderSkyChecks(unittest.TestCase):
                                         self.views(False),[(self.obj,tree)])
         self.assertFalse(selected.any())
 
+    def test_automatic_residual_cut_requires_two_actually_visible_views(self):
+        tree=BVHTree.FromPolygons(self.local.tolist(),self.triangles.tolist(),all_triangles=True)
+        selected=worker.visible_sky_faces(self.obj,self.triangles,self.xyz,np.array([True,True]),
+            self.views(),[(self.obj,tree)],minimum_positive_views=2)
+        self.assertFalse(selected.any())
+        second=self.camera.copy();second.data=self.camera.data.copy();second.name='second sky witness'
+        self.scene.collection.objects.link(second);second.location.x+=.05
+        bpy.context.view_layer.update()
+        projection=np.asarray(second.calc_matrix_camera(bpy.context.evaluated_depsgraph_get(),x=320,y=240)) @ np.asarray(second.matrix_world.inverted())
+        selected=worker.visible_sky_faces(self.obj,self.triangles,self.xyz,np.array([True,True]),
+            self.views()+[(second,projection,np.ones((240,320),dtype=bool))],[(self.obj,tree)],minimum_positive_views=2)
+        self.assertEqual(selected.tolist(),[False,True])
+
+    def test_unknown_view_does_not_count_as_an_architecture_contradiction(self):
+        tree=BVHTree.FromPolygons(self.local.tolist(),self.triangles.tolist(),all_triangles=True)
+        views=worker.RegionViews(self.views())
+        views.negative_masks={}
+        for index,(offset,sky) in enumerate([(.05,True),(-.05,False),(.1,False)]):
+            camera=self.camera.copy();camera.data=self.camera.data.copy();camera.name=f'witness_{index}'
+            self.scene.collection.objects.link(camera);camera.location.x+=offset
+            bpy.context.view_layer.update()
+            projection=np.asarray(camera.calc_matrix_camera(bpy.context.evaluated_depsgraph_get(),x=320,y=240)) @ np.asarray(camera.matrix_world.inverted())
+            views.append((camera,projection,np.full((240,320),sky,dtype=bool)))
+            views.negative_masks[camera.name]=np.zeros((240,320),dtype=bool)
+        selected=worker.visible_sky_faces(self.obj,self.triangles,self.xyz,np.array([True,True]),views,
+            [(self.obj,tree)],minimum_positive_views=2)
+        self.assertEqual(selected.tolist(),[False,True])
+        for camera,projection,mask in views:
+            if not mask.any():views.negative_masks[camera.name][:]=True
+        selected=worker.visible_sky_faces(self.obj,self.triangles,self.xyz,np.array([True,True]),views,
+            [(self.obj,tree)],minimum_positive_views=2)
+        self.assertFalse(selected.any())
+
     def test_one_vlm_artifact_proposal_cannot_overrule_two_building_views(self):
         views=worker.RegionViews(self.views())
         for offset in (-.1,.1):

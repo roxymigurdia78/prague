@@ -207,3 +207,25 @@ set_world_time("昼", r"C:\Users\Astra\Desktop\prague\outputs\atmosphere_referen
 ## ドイツ・ローテンブルク
 
 新しいキーの7,000クレジットを確認し、`outputs/builds/20261110_083134_011934_rothenburg` で生成を開始しました。地点はRothenburg upon Tauber / DE、標高434m、Europe/Berlinです。World IDは `fe01bc11-72e5-4dea-970a-99fa00a4357c`。既存の生成・GLB処理記録を保存しているので、再開は `python run.py build --resume --run-dir outputs/builds/20261110_083134_011934_rothenburg` です。進行状況は `build.json` と `build_connected.log` を参照してください。ウィーンとドイツは本撮影を省く設定です。
+
+## 道路認識のHPC接続が止まった場合
+
+`roads/<ID>/round_00/mask2former.log` には、フォルダ作成・画像転送・プログラム転送・コンテナと推論・結果取得の開始と終了が記録されます。Python起動直後と各画像の処理前後にも表示します。接続やフォルダ作成は120秒、転送は300秒で打ち切ります。推論はHPC側で1200秒（終了猶予30秒）、Windows側のSSHは1260秒が上限です。SSHは標準入力を切断し、タイムアウト時にはその接続のCloudflare子プロセスも停止します。
+
+2026年11月10日19:11のウィーンでは、HPC側の作業フォルダ作成は19:11:15に完了していましたが、Windows側のSSHが終了せず待機していました。確認時にはHPCの負荷は低く、残存するローテンブルクの道路認識もありませんでした。接続設定とタイムアウトを修正して、保存済みGLBから再開しました。道路探索と撮影を含めて再開する場合は、実行中の同じジョブがないことを確かめてから次を使います。
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 run.py build --resume --with-capture --run-dir outputs/builds/20261109_234836_223354
+```
+
+## 初期BlenderのGPU・表示
+
+新規一括生成と未完了ジョブの再開には、空の線・灰色の大きな面の検知・境界補正・除去・再描画・建物欠損の確認を接続済みです。最大6回で、残骸が残った場合はログと`result.json`の`sky_residual_cleanup.needs_review`に明示します。完成済みの街は`build --resume --refine-sky --run-dir outputs/builds/20261110_083134_011934_rothenburg`で再清掃し、元を残した初期Blenderの修正版を作れます。設定と停止条件は[蓋除去と消灯](SKY_CLEANUP.md)を参照してください。
+
+新規作成する初期シーンではOptiX、CUDA、HIP、Metal、oneAPIの順に利用可能なGPUを選びます。GPUを検出できなければCPUを選び、結果を`result.json`の`render_device`に記録します。このPCはRTX 4060 TiをOptiXで利用します。
+
+`WINDOW_...`などの黒い四角は検出位置のEmptyです。窓材質や照明そのものではありません。初期表示では`Detected windows and fixtures`コレクションを隠し、必要なときだけOutlinerの目で再表示できます。
+
+Blender標準では読込時にレンダリング表示が解除されるため、このPCには`Streetlab opening view`アドオンを登録しました。`streetlab_open_rendered`が設定されたStreetlabファイルだけ、読込後にレンダリング表示へ切り替えます。初回はBlenderを一度終了してから開き直してください。無効化はプリファレンスのアドオンから行えます。他のPCにも導入する場合のソースは`scripts/blender/streetlab_opening.py`です。
+
+ウィーンの追加修正版は`outputs/builds/20261109_234836_223354/revised_20261110/street_initial.blend`です。画像で確認した空の範囲を明示して残骸を除去したコピーで、元GLB・初期シーン・既存写真は保持しています。確認結果は同じフォルダの`verification.json`と`sky_preview.png`です。この追加修正を、別の街へ同じ座標で適用しないでください。

@@ -74,7 +74,8 @@ class ConvergenceTests(unittest.TestCase):
              patch.object(prepare_world.sky_cleanup_polish,'main') as polish, \
              patch.object(prepare_world.sky_cleanup_polish,'save_clean_scene',side_effect=finish), \
              patch.object(prepare_world,'load_policy',return_value=policy or self.policy),redirect_stdout(io.StringIO()):
-            result=prepare_world.main([str(self.source)])
+            with patch.object(prepare_world.sky_residual_loop,'run',side_effect=lambda folder,**_kwargs:folder):
+                result=prepare_world.main([str(self.source)])
         return result,inspection,polish,calls,finalized
 
     def test_budget_exit_applies_last_repairs_and_preserves_the_base(self):

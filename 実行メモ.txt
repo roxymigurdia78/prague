@@ -1,4 +1,31 @@
-実行メモ（2026-11-10）
+実行メモ（2026-11-11）
+
+【今回完成したドイツの修正版】
+C:\Users\Astra\Desktop\prague\outputs\builds\20261110_083134_011934_rothenburg\sky_revisions\20261111_010037_866086\street_initial.blend
+空を覆っていた大きな灰色の面を除去済み。屋根際の細かい残骸は残るため「要確認」で終了。
+元のGLB・初期Blenderは保持。下側の505937面とUV、方位・太陽・大気の一致を検証済み。
+GPUはRTX 4060 Ti / OptiX。確認画像は同じフォルダの qa、検証結果は verification.json。
+
+【完成済みの街の空だけ、改良版で清掃し直す】
+cd C:\Users\Astra\Desktop\prague
+ドイツ：
+.\.venv\Scripts\python.exe -X utf8 run.py build --resume --refine-sky --run-dir outputs/builds/20261110_083134_011934_rothenburg
+ウィーン：
+.\.venv\Scripts\python.exe -X utf8 run.py build --resume --refine-sky --run-dir outputs/builds/20261109_234836_223354
+Worldを再生成せず、保存済みGLBと地点・大気を使う。
+元のBlenderと写真は残し、sky_revisions\日時\street_initial.blend に修正版を作る。
+既存写真は清掃前のまま。修正版の本撮影を追加したい場合だけ --with-capture で再開する。
+
+【Blenderの表示・GPU】
+新しく生成する初期Blenderは、利用できればGPUを自動選択する。このPCはRTX 4060 Ti / OptiX。
+窓・街灯などの黒い枠は検出位置のEmptyで、写真・窓材質・発光面ではない。初期表示では隠す。
+表示したいときはOutlinerの「Detected windows and fixtures」コレクションの目を開く。
+Blender標準では読込時にレンダリング表示が解除されるため、Streetlab opening viewアドオンを導入済み。
+対象ファイルだけ開いた直後にレンダリング表示へ切り替える。反映にはBlenderを一度終了して開き直す。
+解除する場合はプリファレンスのアドオン「Streetlab opening view」を無効にする。
+ウィーンの空を追加修正した版：
+outputs\builds\20261109_234836_223354\revised_20261110\street_initial.blend
+元の初期Blender・GLB・以前の写真はそのまま残している。
 
 【日本語の会話から作る入口を追加】
 会話.json の content を日本語で書き換え、.env のWorldキーを設定し、
@@ -29,6 +56,7 @@ cd C:\Users\Astra\Desktop\prague
 → 日時の決定、気象・CAMS大気データの取得
 → World Labsで世界生成、HQのテクスチャ付きGLB取得
 → 空の蓋と破片の除去、HPCによる建物の誤除去確認・保護の繰り返し
+→ 灰色の空面・細い線の追加検知、除去、疑わしい建物部分の復元と再確認（最大6回）
 → Principled BSDF化、自発光・環境光ゼロ、カメラ・ライトの除去
 → HPCで窓・街灯・ランタンを検出、3D位置・向き・候補領域を記録
 → 地点・日時・標高・大気に対応する太陽と空を初期Blenderへ設定
@@ -60,6 +88,19 @@ cd C:\Users\Astra\Desktop\prague
 過去の世界は別フォルダに残る。キーやプロンプトを変更しても削除しない。
 
 【途中で止まった場合】
+空の線・薄い面の自動検知 → 別コピーで除去 → 再描画 → 建物の欠損確認 → 残骸の再検査も接続済み。
+新規生成・未完了の再開で自動実行する。最大6回、形状不変2回、小さい改善2回で打ち切る。
+灰色の大きな空面も対象。色と輪郭で空と建物の境界を補正し、1回の削除は8%以下に小分けする。
+「空と分からない」視点を「建物だ」とは数えない。複数視点での空の確認と建物保護は継続する。
+候補が残る場合は「残骸の確認が必要」と出る。完全に除去できたと偽って終了しない。
+設定は config\sky_residual_policy.json。作業データは outputs\sky_residuals\、回数と保存先は入力側の residual_loop\status.json に残る。
+
+道路認識の mask2former.log には、HPC stage START/END と画像ごとの START/END が出る。
+順序は作業フォルダ作成 → 画像転送 → プログラム転送 → コンテナ/Python起動 → 認識 → 結果取得。
+接続・フォルダ作成などは最長2分、画像転送・結果取得は最長5分で停止し、該当段階を表示する。
+HPC側のコンテナ・認識も最長20分（停止猶予30秒）。Windows側で止めても永久には残らない。
+停止後は下記の同じ保存先への再開コマンドを使う。保存済みGLBを再生成する必要はない。
+
 HPC応答の途切れやサーバーの一時エラーは自動で再試行する。続けて失敗した場合は記録を残して停止する。
 同じプロンプトで同じ build コマンドを実行すると、未完了の最新ジョブを再開する。
 プロンプトを変更すると別の街として新しい保存先を作る。

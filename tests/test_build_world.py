@@ -170,6 +170,63 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(build.read(folder / 'location.json')['location']['elevation'], 171)
         paid.assert_not_called()
 
+    def test_cached_cap_removal_still_runs_the_new_residual_loop_without_world_api(self):
+        from streetlab import sky_residual_loop
+        folder=self.root/'cached_cap';folder.mkdir()
+        world_dir=folder/'world';world_dir.mkdir()
+        (world_dir/'street_textured.glb').write_bytes(struct.pack('<4sII',b'glTF',2,12))
+        build.save(folder/'location.json',{'location':{'latitude':49.3,'longitude':10.1,
+            'elevation':434,'timezone':'Europe/Berlin'}})
+        build.save(folder/'atmosphere.json',{})
+        build.save(folder/'build.json',{'config':{'world_dir':str(world_dir),'model':'marble-1.1',
+            'date':'2026-07-15','time':'12:00','reference_year':2025}})
+        checkpoint=folder/'checkpoint';polished=folder/'cached_polished'
+        with patch.object(build.atmosphere_reference,'plan_atmosphere'), \
+             patch.object(build,'cleanup_state',return_value=(checkpoint,polished)), \
+             patch.object(build,'cleanup_complete',return_value=True), \
+             patch.object(build.prepare_world,'main') as cap, \
+             patch.object(sky_residual_loop,'run',side_effect=RuntimeError('residual loop reached')) as residual, \
+             patch.object(build.world,'api') as api,patch.object(build.world,'main') as paid, \
+             redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(RuntimeError,'residual loop reached'):build.execute(folder)
+        residual.assert_called_once_with(polished)
+        cap.assert_not_called();api.assert_not_called();paid.assert_not_called()
+
+    def test_sky_revision_preserves_the_old_blender_and_never_calls_world_api(self):
+        from types import SimpleNamespace
+        from streetlab import sky_residual_loop
+        folder=self.root/'revision';folder.mkdir()
+        world=folder/'world';world.mkdir()
+        (world/'street_textured.glb').write_bytes(struct.pack('<4sII',b'glTF',2,12))
+        original=folder/'street_initial.blend';original.write_bytes(b'original street')
+        build.save(folder/'build.json',{'status':'complete','config':{'world_dir':str(world),
+            'capture_enabled':True,'roads':{'enabled':True}}})
+        build.save(folder/'initialize_request.json',{'output':str(folder),'prepared_dir':'old',
+            'capture_enabled':True,'capture_plan':'old-plan','capture_source':'old-source'})
+        build.save(folder/'result.json',{'initial_blend':str(original),'capture_enabled':True})
+        checkpoint=folder/'checkpoint';checkpoint.mkdir();prepared=folder/'repaired';prepared.mkdir()
+        build.save(checkpoint/'preparation.json',{'status':'complete','polished':str(prepared)})
+        def initialize(command,**_kwargs):
+            request=build.read(command[-1]);output=Path(request['output'])
+            self.assertFalse(request['capture_enabled']);self.assertNotIn('capture_plan',request)
+            path=output/'street_initial.blend';path.write_bytes(b'revised street')
+            build.save(output/'result.json',{'initial_blend':str(path),'dark_blend':str(prepared/'street_relight.blend'),
+                'capture_enabled':False,'views':[],'camera_plan_views':[]})
+            return SimpleNamespace(returncode=0)
+        with patch.object(build,'cleanup_state',return_value=(checkpoint,prepared)), \
+             patch.object(sky_residual_loop,'run',return_value=prepared), \
+             patch.object(sky_residual_loop,'summary',return_value=None), \
+             patch.object(build.subprocess,'run',side_effect=initialize), \
+             patch.object(build,'show_result'),patch.object(build.world,'api') as api, \
+             patch.object(build.world,'main') as paid:
+            build.refine_existing_build(folder)
+        api.assert_not_called();paid.assert_not_called()
+        self.assertEqual(original.read_bytes(),b'original street')
+        result=build.read(folder/'result.json')
+        self.assertNotEqual(result['initial_blend'],str(original))
+        self.assertTrue(Path(result['previous_result']).exists())
+        self.assertFalse(build.read(folder/'build.json')['config']['capture_enabled'])
+
     def test_missing_preview_is_detected_for_resume(self):
         folder = self.root
         for name in ('dark.blend', 'dark.glb', 'initial.blend'):

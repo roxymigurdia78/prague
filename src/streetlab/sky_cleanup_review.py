@@ -39,13 +39,13 @@ def validate(text, ids):
     return data
 
 
-def picture(path):
+def picture(path, *, grid=True):
     with Image.open(path) as original:
         image = original.convert('RGB')
         image.thumbnail((1024, 1024))
         width, height = image.size
         draw = ImageDraw.Draw(image)
-        for i in range(1, 10):
+        for i in (range(1, 10) if grid else ()):
             x, y = width * i // 10, height * i // 10
             draw.line((x, 0, x, height), fill=(90, 90, 90))
             draw.line((0, y, width, y), fill=(90, 90, 90))
@@ -83,12 +83,12 @@ def archive_reply(path, label):
     return destination
 
 
-def request_review(client,model,group,folder,after_folder,response_file,env_file=None):
+def request_review(client,model,group,folder,after_folder,response_file,env_file=None,*,add_grid=True):
     content=[{'type':'text','text':'Compare these exact view IDs once each: '+json.dumps(group)+
         '. Each ID has a BEFORE/AFTER pair. Use at most four 4-corner rectangles per ID. No contours.'}]
     for name in group:
         for label,path in (('BEFORE',folder/(name+'.png')),('AFTER',after_folder/(name+'_after.png'))):
-            content += [{'type':'text','text':name+' '+label},{'type':'image_url','image_url':{'url':picture(path)}}]
+            content += [{'type':'text','text':name+' '+label},{'type':'image_url','image_url':{'url':picture(path,grid=add_grid)}}]
     for attempt in range(1,4):
         print('HPCで建物の誤除去を前後比較:',', '.join(group),f'({attempt}/3)',flush=True)
         stream=client.chat.completions.create(model=model,reasoning_effort='none',stream=True,max_tokens=4500,

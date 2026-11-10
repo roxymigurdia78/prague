@@ -24,6 +24,7 @@ COMMANDS = {
     "map": ("scene_inventory", "窓・器具の位置を記録"),
     "sky-cleanup": ("sky_cleanup", "空の領域を検出・分離"),
     "sky-polish": ("sky_cleanup_polish", "残った空・破片を清掃"),
+    "sky-residuals": ("sky_residual_loop", "保存済みの街の空に残る線・面を検知・除去・再確認"),
     "images": ("generate_material_variants", "小物の画像を生成・編集"),
     "trellis": ("trellis_watch", "入力画像のフォルダを監視"),
     "hpc": ("trellis_hpc", "HPCのジョブを操作"),

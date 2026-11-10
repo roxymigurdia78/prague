@@ -67,6 +67,7 @@ def save_relight_scene(folder):
         world.use_nodes=True
         nodes=world.node_tree.nodes;nodes.clear()
         background=nodes.new('ShaderNodeBackground')
+        background.name='Background'
         background.inputs['Color'].default_value=(0,0,0,1)
         background.inputs['Strength'].default_value=0
         output=nodes.new('ShaderNodeOutputWorld')

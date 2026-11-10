@@ -340,7 +340,7 @@ def main(argv=None):
                 with (folder/'mask2former.log').open('w',encoding='utf-8') as log:
                     completed=subprocess.run([pwsh, "-NoProfile", "-File", str(HERE / "Invoke-Mask2Former.ps1"),
                                 "-BatchDirectory", str(folder / "images"), "-OutputDirectory", str(folder / "masks")],
-                                stdout=log,stderr=subprocess.STDOUT)
+                                stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT)
                 if completed.returncode:
                     raise RuntimeError('HPC道路認識で停止しました: '+str(folder/'mask2former.log'))
             for view in views:
