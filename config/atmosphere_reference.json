@@ -1,0 +1,7 @@
+{
+  "endpoint": "https://ads.atmosphere.copernicus.eu/api",
+  "dataset": "cams-global-reanalysis-eac4",
+  "default_reference_year": 2025,
+  "available_start_date": "2003-01-01",
+  "available_end_date": "2025-12-31"
+}

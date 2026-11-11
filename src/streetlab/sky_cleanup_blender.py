@@ -12,6 +12,8 @@ from mathutils.bvhtree import BVHTree
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from streetlab.sky_cleanup import connected_sky, filter_sky_points, fill_small_holes, mesh_components, close_sky_mask, refine_cut_boundary
+from streetlab.sky_cleanup import polygon_sky_mask, cleanup_fingerprint
+from streetlab.sky_semantics import allowed as allowed_protection
 
 _TRANSFORMS={}
 
@@ -23,6 +25,7 @@ def save_json(path, data):
 def render(scene, camera, output, name):
     scene.camera = camera
     scene.render.filepath = str(output / (name + ".png"))
+    bpy.context.view_layer.update()
     bpy.ops.render.render(write_still=True)
 
 
@@ -53,7 +56,38 @@ def nearest_face(origin, direction, trees):
     return nearest
 
 
-def visible_sky_faces(obj,indices,xyz,eligible,region_views,trees,allow_surrounded=True,require_consensus=True,reference_trees=None,maximum_depth=None):
+def protected_face_owners(region_views,trees):
+    """Preserve the original surface visible at every protected image pixel.
+
+    A face's centre can be occluded even while one of its corners is visible.
+    Pixel ownership supplies that visibility witness without protecting unrelated
+    geometry behind a building along the same viewing ray.
+    """
+    owners={}
+    masks=getattr(region_views,'protected',{})
+    for camera,projection,_region in region_views:
+        mask=masks.get(camera.name)
+        if mask is None or not mask.any():continue
+        y,x=np.nonzero(mask);h,w=mask.shape
+        clip=np.column_stack(((x+.5)/w*2-1,1-(y+.5)/h*2,-np.ones(len(x)),np.ones(len(x))))
+        points=clip @ np.linalg.inv(projection).T
+        points=points[:,:3]/points[:,3:4]
+        origin=camera.matrix_world.translation
+        rays=points-np.asarray(origin)
+        rays/=np.maximum(np.linalg.norm(rays,axis=1,keepdims=True),1e-12)
+        for direction in rays:
+            hit=nearest_face(origin,Vector(direction),trees)
+            if hit is not None:owners.setdefault(hit[1].name,set()).add(int(hit[2]))
+    return owners
+
+
+def ensure_protected_owners(region_views,trees):
+    if getattr(region_views,'protected',None) and not hasattr(region_views,'protected_faces'):
+        region_views.protected_faces=protected_face_owners(region_views,trees)
+    return getattr(region_views,'protected_faces',{})
+
+
+def visible_sky_faces(obj,indices,xyz,eligible,region_views,trees,allow_surrounded=True,require_consensus=True,reference_trees=None,maximum_depth=None,minimum_positive_views=1):
     candidates=np.flatnonzero(eligible)
     selected=np.zeros_like(eligible)
     if not len(candidates):
@@ -77,6 +111,8 @@ def visible_sky_faces(obj,indices,xyz,eligible,region_views,trees,allow_surround
     positive=np.zeros(len(candidates),dtype=int)
     negative=np.zeros(len(candidates),dtype=int)
     surrounded=np.zeros(len(candidates),dtype=int)
+    owners=ensure_protected_owners(region_views,trees)
+    protected=np.isin(candidates,list(owners.get(obj.name,set())))
     for camera,projection,region in region_views:
         clip=np.column_stack((centers,np.ones(len(centers)))) @ projection.T
         ndc=clip[:,:2]/np.maximum(clip[:,3:4],1e-9)
@@ -90,11 +126,26 @@ def visible_sky_faces(obj,indices,xyz,eligible,region_views,trees,allow_surround
         py=np.clip(((1-sn[:,:,1])*.5*h).astype(int),0,h-1)
         inside=(sc[:,:,3]>0)&(np.abs(sn)<1).all(axis=2)&region[py,px]
         coverage=inside.mean(axis=1)
+        building_mask=getattr(region_views,'negative_masks',{}).get(camera.name)
+        building_coverage=building_mask[py,px].mean(axis=1) if building_mask is not None else None
+        protection=getattr(region_views,'protected',{}).get(camera.name)
+        protected_overlap=np.zeros(len(candidates),dtype=bool)
+        if protection is not None and protection.any():
+            # A narrow protected region may fall between all seven face samples.
+            # Conservatively test its projected bounding rectangle using a summed
+            # area table, retaining a face if any protected pixel could intersect it.
+            integral=np.pad(protection.cumsum(axis=0,dtype=np.int32).cumsum(axis=1,dtype=np.int32),((1,0),(1,0)))
+            left,right=px[:,:3].min(axis=1),px[:,:3].max(axis=1)+1
+            top,bottom=py[:,:3].min(axis=1),py[:,:3].max(axis=1)+1
+            protected_overlap=(integral[bottom,right]-integral[top,right]
+                -integral[bottom,left]+integral[top,left])>0
         origin=camera.matrix_world.translation
         for row in np.flatnonzero(on_screen):
             direction=(Vector(centers[row])-origin).normalized()
             hit=nearest_face(origin,direction,trees)
             if hit is not None and hit[1]==obj and hit[2]==candidates[row]:
+                if protected_overlap[row]:
+                    protected[row]=True
                 if reference_trees is not None:
                     reference=nearest_face(origin,direction,reference_trees)
                     depth_limit=maximum_depth.get(camera.name,maximum_depth['default']) if isinstance(maximum_depth,dict) else maximum_depth
@@ -109,9 +160,9 @@ def visible_sky_faces(obj,indices,xyz,eligible,region_views,trees,allow_surround
                           ((-1,-1),(0,-1),(1,-1),(-1,0),(1,0),(-1,1),(0,1),(1,1))]
                     if all(0<=x<w and 0<=y<h and region[y,x] for x,y in ring):
                         surrounded[row]+=1
-                elif coverage[row]<=.15:
+                elif coverage[row]<=.15 and (building_coverage is None or building_coverage[row]>=.5):
                     negative[row]+=1
-    selected[candidates]=(positive>0)&((positive>=2*negative)|((surrounded>0)&allow_surrounded)|(not require_consensus))
+    selected[candidates]=(positive>=minimum_positive_views)&((positive>=2*negative)|((surrounded>0)&allow_surrounded)|(not require_consensus))&~protected
     return selected
 
 
@@ -120,6 +171,7 @@ def remove_floaters(obj, indices, xyz, sky_mask, region_views, trees, height_gat
     groups=mesh_components(xyz,indices,~sky_mask,precision=max(span*1e-5,1e-6))
     extra=np.zeros_like(sky_mask)
     details=[]
+    owners=ensure_protected_owners(region_views,trees).get(obj.name,set())
     for faces in groups:
         if len(faces)>max(2000,len(indices)*.02):
             continue
@@ -131,6 +183,7 @@ def remove_floaters(obj, indices, xyz, sky_mask, region_views, trees, height_gat
         centers=xyz[indices[sampled]].mean(axis=1)
         face_set=set(map(int,faces))
         support=opposition=strong=0
+        protected_component=bool(set(map(int,faces))&owners)
         observations=[]
         for camera,projection,region in region_views:
             context=region_views.contexts[camera.name]
@@ -148,6 +201,9 @@ def remove_floaters(obj, indices, xyz, sky_mask, region_views, trees, height_gat
                     actual.append(row)
             if not actual:
                 continue
+            protection=getattr(region_views,'protected',{}).get(camera.name)
+            if protection is not None and protection[py[actual],px[actual]].any():
+                protected_component=True
             # Use the whole component extent so a roof-edge fragment does not look isolated
             # merely because a few chosen face centers project into sky.
             all_centers=xyz[indices[faces]].mean(axis=1)
@@ -175,7 +231,7 @@ def remove_floaters(obj, indices, xyz, sky_mask, region_views, trees, height_gat
             elif coverage<.3 or surround<.2:
                 opposition+=1
             observations.append({"view":camera.name,"sky_around":surround,"sky_context":coverage})
-        if support>0 and (opposition==0 or (allow_strong_context and strong>0)):
+        if support>0 and not protected_component and (opposition==0 or (allow_strong_context and strong>0)):
             extra[faces]=True
             details.append({"faces":len(faces),"bounds_min":low.tolist(),"bounds_max":high.tolist(),"views":observations})
     return extra,details
@@ -459,10 +515,20 @@ def apply(output, config):
     weights = np.asarray([[1,0,0],[0,1,0],[0,0,1],[.5,.5,0],[0,.5,.5],[.5,0,.5],[1/3,1/3,1/3]])
     region_views = RegionViews()
     region_views.contexts={}
+    region_views.protected={}
+    protection_path=output/'sky_protection_review.json'
+    protection=json.loads(protection_path.read_text(encoding='utf-8')) if protection_path.exists() else {'views':[]}
+    protected_polygons={v['id']:v.get('protected_polygons',[]) for v in protection['views']}
     for view, rgb in zip(analysis["views"],rendered):
         height,width=rgb.shape[:2]
         mask = fill_small_holes(connected_sky(rgb, filtered_points[view["id"]], tolerance=config.get("region_tolerance",.14), adaptive=True))
-        context = fill_small_holes(close_sky_mask(mask,radius=2),maximum=int(width*height*.06))
+        # A roofline can enclose a whole upper facade in the sky mask. Only
+        # bridge tiny holes; a six-percent image hole can be a real building.
+        context = fill_small_holes(close_sky_mask(mask,radius=2),maximum=min(2000,int(width*height*.002)))
+        protected=(polygon_sky_mask(context.shape,protected_polygons.get(view['id'],[]))
+            & allowed_protection(output,view['id'],context.shape))
+        context &= ~protected
+        region_views.protected[view['id']]=protected
         # Save the per-view mask so color/region mistakes can be reviewed independently.
         preview = bpy.data.images.new(view["id"] + "_mask", width=width, height=height)
         rgba = np.ones((height,width,4),dtype=np.float32)
@@ -499,7 +565,7 @@ def apply(output, config):
             tree=BVHTree.FromPolygons(local.tolist(),indices[remaining].tolist(),all_triangles=True)
             next_trees=[(o,t) for o,t in trees if o!=obj]+[(obj,tree,remaining)]
             additional=visible_sky_faces(obj,indices,world_xyz,(np.min(z,axis=1)>=height_gate)&~mask,
-                                         region_views,next_trees)
+                                         region_views,next_trees,allow_surrounded=False)
             count=int(additional.sum())
             if not count:
                 break
@@ -515,7 +581,8 @@ def apply(output, config):
         floater_details.extend(details)
         if thorough:
             new_xyz,adjustment=refine_cut_boundary(world_xyz,indices,mask,height_gate,
-                maximum_move=(views["height_high"]-views["height_low"])*.0015)
+                maximum_move=(views["height_high"]-views["height_low"])*.0015,
+                preserve_geometry=any(mask.any() for mask in region_views.protected.values()))
             inverse=np.asarray(obj.matrix_world.inverted())
             local_xyz=new_xyz @ inverse[:3,:3].T+inverse[:3,3]
             mesh.vertices.foreach_set("co",local_xyz.astype(np.float32).ravel())
@@ -562,6 +629,12 @@ def apply(output, config):
         obj.select_set(True)
     bpy.ops.export_scene.gltf(filepath=str(output / "street_without_sky.glb"), export_format="GLB", use_selection=True, export_animations=False)
     bpy.ops.wm.save_as_mainfile(filepath=str(output / "sky_review.blend"))
+    # Review the serialized geometry. Reloading also clears stale camera/mesh
+    # dependency data left after the large mesh edit and image-mask sampling.
+    bpy.ops.wm.open_mainfile(filepath=str(output/'sky_review.blend'))
+    scene=bpy.context.scene
+    cleaned=[obj for obj in scene.objects if obj.type=='MESH' and obj.get('sky_source') and not obj.get('sky_removed')]
+    sky_objects=[obj for obj in scene.objects if obj.type=='MESH' and obj.get('sky_removed')]
     red = bpy.data.materials.new("Sky candidate overlay")
     red.use_nodes = True
     red.node_tree.nodes.clear()
@@ -583,6 +656,7 @@ def apply(output, config):
     for view in views["views"]:
         render(scene, bpy.data.objects[view["id"]], output, view["id"] + "_overlay")
     save_json(output / "report.json", {"selected_faces": selected, "total_faces": total,
+              "cleanup_fingerprint":cleanup_fingerprint(config,analysis,protection),
               "kept_faces": sum(len(o.data.polygons) for o in cleaned),
               "candidate_faces": sum(len(o.data.polygons) for o in sky_objects),
               "original_faces": original_faces, "maximum_upper_edge": maximum_edge,

@@ -10,6 +10,7 @@ from mathutils.bvhtree import BVHTree
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'src'))
 from streetlab import sky_cleanup_blender as worker
+from streetlab.sky_cleanup_polish_blender import semantic_artifact_faces
 
 
 class BlenderSkyChecks(unittest.TestCase):
@@ -58,6 +59,107 @@ class BlenderSkyChecks(unittest.TestCase):
         selected=worker.visible_sky_faces(self.obj,self.triangles,self.xyz,np.array([True,True]),
                                         self.views(False),[(self.obj,tree)])
         self.assertFalse(selected.any())
+
+    def test_automatic_residual_cut_requires_two_actually_visible_views(self):
+        tree=BVHTree.FromPolygons(self.local.tolist(),self.triangles.tolist(),all_triangles=True)
+        selected=worker.visible_sky_faces(self.obj,self.triangles,self.xyz,np.array([True,True]),
+            self.views(),[(self.obj,tree)],minimum_positive_views=2)
+        self.assertFalse(selected.any())
+        second=self.camera.copy();second.data=self.camera.data.copy();second.name='second sky witness'
+        self.scene.collection.objects.link(second);second.location.x+=.05
+        bpy.context.view_layer.update()
+        projection=np.asarray(second.calc_matrix_camera(bpy.context.evaluated_depsgraph_get(),x=320,y=240)) @ np.asarray(second.matrix_world.inverted())
+        selected=worker.visible_sky_faces(self.obj,self.triangles,self.xyz,np.array([True,True]),
+            self.views()+[(second,projection,np.ones((240,320),dtype=bool))],[(self.obj,tree)],minimum_positive_views=2)
+        self.assertEqual(selected.tolist(),[False,True])
+
+    def test_unknown_view_does_not_count_as_an_architecture_contradiction(self):
+        tree=BVHTree.FromPolygons(self.local.tolist(),self.triangles.tolist(),all_triangles=True)
+        views=worker.RegionViews(self.views())
+        views.negative_masks={}
+        for index,(offset,sky) in enumerate([(.05,True),(-.05,False),(.1,False)]):
+            camera=self.camera.copy();camera.data=self.camera.data.copy();camera.name=f'witness_{index}'
+            self.scene.collection.objects.link(camera);camera.location.x+=offset
+            bpy.context.view_layer.update()
+            projection=np.asarray(camera.calc_matrix_camera(bpy.context.evaluated_depsgraph_get(),x=320,y=240)) @ np.asarray(camera.matrix_world.inverted())
+            views.append((camera,projection,np.full((240,320),sky,dtype=bool)))
+            views.negative_masks[camera.name]=np.zeros((240,320),dtype=bool)
+        selected=worker.visible_sky_faces(self.obj,self.triangles,self.xyz,np.array([True,True]),views,
+            [(self.obj,tree)],minimum_positive_views=2)
+        self.assertEqual(selected.tolist(),[False,True])
+        for camera,projection,mask in views:
+            if not mask.any():views.negative_masks[camera.name][:]=True
+        selected=worker.visible_sky_faces(self.obj,self.triangles,self.xyz,np.array([True,True]),views,
+            [(self.obj,tree)],minimum_positive_views=2)
+        self.assertFalse(selected.any())
+
+    def test_one_vlm_artifact_proposal_cannot_overrule_two_building_views(self):
+        views=worker.RegionViews(self.views())
+        for offset in (-.1,.1):
+            camera=self.camera.copy();camera.data=self.camera.data.copy()
+            self.scene.collection.objects.link(camera);camera.location.x+=offset
+            bpy.context.view_layer.update()
+            projection=np.asarray(camera.calc_matrix_camera(bpy.context.evaluated_depsgraph_get(),x=320,y=240)) @ np.asarray(camera.matrix_world.inverted())
+            views.append((camera,projection,np.zeros((240,320),dtype=bool)))
+        tree=BVHTree.FromPolygons(self.local.tolist(),self.triangles.tolist(),all_triangles=True)
+        eligible=np.array([True,True])
+        unsafe=worker.visible_sky_faces(self.obj,self.triangles,self.xyz,eligible,views,[(self.obj,tree)],require_consensus=False)
+        self.assertTrue(unsafe[1])
+        selected=semantic_artifact_faces(self.obj,self.triangles,self.xyz,eligible,views,[(self.obj,tree)])
+        self.assertFalse(selected.any())
+
+    def test_face_touching_a_protected_building_patch_is_preserved(self):
+        # A narrow wall patch may cover only a corner of a triangle. Removing
+        # that whole triangle reopens the same protected wall at every review.
+        views=worker.RegionViews(self.views())
+        protection=np.zeros((240,320),dtype=bool)
+        point=np.append(self.xyz[3],1) @ self.projection.T
+        ndc=point[:2]/point[3]
+        x=int((ndc[0]+1)*.5*320);y=int((1-ndc[1])*.5*240)
+        protection[y-2:y+3,x-2:x+3]=True
+        views.protected={self.camera.name:protection}
+        tree=BVHTree.FromPolygons(self.local.tolist(),self.triangles.tolist(),all_triangles=True)
+        selected=worker.visible_sky_faces(self.obj,self.triangles,self.xyz,np.array([True,True]),
+            views,[(self.obj,tree)],allow_surrounded=False)
+        self.assertFalse(selected.any())
+
+    def test_small_protected_patch_between_triangle_samples_is_preserved(self):
+        views=worker.RegionViews(self.views())
+        protection=np.zeros((240,320),dtype=bool)
+        # A small wall region can lie inside a face without touching a vertex,
+        # midpoint, or centroid; seven point samples must not erase it.
+        world=.6*self.xyz[3]+.2*self.xyz[4]+.2*self.xyz[5]
+        point=np.append(world,1) @ self.projection.T
+        ndc=point[:2]/point[3]
+        x=int((ndc[0]+1)*.5*320);y=int((1-ndc[1])*.5*240)
+        protection[y-1:y+2,x-1:x+2]=True
+        views.protected={self.camera.name:protection}
+        tree=BVHTree.FromPolygons(self.local.tolist(),self.triangles.tolist(),all_triangles=True)
+        selected=worker.visible_sky_faces(self.obj,self.triangles,self.xyz,np.array([True,True]),
+            views,[(self.obj,tree)],allow_surrounded=False)
+        self.assertFalse(selected.any())
+
+    def test_visible_corner_is_preserved_when_the_face_center_is_occluded(self):
+        mesh=bpy.data.meshes.new('partially occluded building')
+        mesh.from_pydata([(-1,-1,3),(1,-1,3),(0,1,3),(-.3,-.5,2),(.3,-.5,2),(0,.2,2)],[],[(0,1,2),(3,4,5)])
+        self.obj.data=mesh;bpy.context.view_layer.update()
+        xyz=worker.coordinates(self.obj)
+        local=np.asarray([v.co[:] for v in mesh.vertices])
+        tree=BVHTree.FromPolygons(local.tolist(),self.triangles.tolist(),all_triangles=True)
+        second=self.camera.copy();second.data=self.camera.data.copy()
+        self.scene.collection.objects.link(second);second.location.x+=.8
+        bpy.context.view_layer.update()
+        projection=np.asarray(second.calc_matrix_camera(bpy.context.evaluated_depsgraph_get(),x=320,y=240)) @ np.asarray(second.matrix_world.inverted())
+        views=worker.RegionViews([(self.camera,self.projection,np.zeros((240,320),dtype=bool)),
+            (second,projection,np.ones((240,320),dtype=bool))])
+        protected=np.zeros((240,320),dtype=bool)
+        point=np.append(np.asarray((1.4,-.6,3)),1) @ self.projection.T
+        ndc=point[:2]/point[3];x=int((ndc[0]+1)*.5*320);y=int((1-ndc[1])*.5*240)
+        protected[y-1:y+2,x-1:x+2]=True
+        views.protected={self.camera.name:protected,second.name:np.zeros_like(protected)}
+        result=worker.visible_sky_faces(self.obj,self.triangles,xyz,np.array([True,False]),views,[(self.obj,tree)],allow_surrounded=False)
+        self.assertIn(0,views.protected_faces[self.obj.name])
+        self.assertFalse(result[0])
 
     def test_deeper_building_behind_artifact_is_preserved(self):
         original=BVHTree.FromPolygons(self.local.tolist(),self.triangles.tolist(),all_triangles=True)

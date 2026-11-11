@@ -1,0 +1,145 @@
+実行メモ（2026-11-11）
+
+【今回完成したドイツの修正版】
+C:\Users\Astra\Desktop\prague\outputs\builds\20261110_083134_011934_rothenburg\sky_revisions\20261111_010037_866086\street_initial.blend
+空を覆っていた大きな灰色の面を除去済み。屋根際の細かい残骸は残るため「要確認」で終了。
+元のGLB・初期Blenderは保持。下側の505937面とUV、方位・太陽・大気の一致を検証済み。
+GPUはRTX 4060 Ti / OptiX。確認画像は同じフォルダの qa、検証結果は verification.json。
+
+【完成済みの街の空だけ、改良版で清掃し直す】
+cd C:\Users\Astra\Desktop\prague
+ドイツ：
+.\.venv\Scripts\python.exe -X utf8 run.py build --resume --refine-sky --run-dir outputs/builds/20261110_083134_011934_rothenburg
+ウィーン：
+.\.venv\Scripts\python.exe -X utf8 run.py build --resume --refine-sky --run-dir outputs/builds/20261109_234836_223354
+Worldを再生成せず、保存済みGLBと地点・大気を使う。
+元のBlenderと写真は残し、sky_revisions\日時\street_initial.blend に修正版を作る。
+既存写真は清掃前のまま。修正版の本撮影を追加したい場合だけ --with-capture で再開する。
+
+【Blenderの表示・GPU】
+新しく生成する初期Blenderは、利用できればGPUを自動選択する。このPCはRTX 4060 Ti / OptiX。
+窓・街灯などの黒い枠は検出位置のEmptyで、写真・窓材質・発光面ではない。初期表示では隠す。
+表示したいときはOutlinerの「Detected windows and fixtures」コレクションの目を開く。
+Blender標準では読込時にレンダリング表示が解除されるため、Streetlab opening viewアドオンを導入済み。
+対象ファイルだけ開いた直後にレンダリング表示へ切り替える。反映にはBlenderを一度終了して開き直す。
+解除する場合はプリファレンスのアドオン「Streetlab opening view」を無効にする。
+ウィーンの空を追加修正した版：
+outputs\builds\20261109_234836_223354\revised_20261110\street_initial.blend
+元の初期Blender・GLB・以前の写真はそのまま残している。
+
+【日本語の会話から作る入口を追加】
+会話.json の content を日本語で書き換え、.env のWorldキーを設定し、
+「会話から世界を作る.cmd」をダブルクリックする。
+コマンド：.\.venv\Scripts\python.exe -X utf8 run.py conversation-build
+HPCが英語プロンプトを作り、GLB・清掃・検出・初期Blenderまで一括で進む。
+詳しい記入例・再開方法は「会話から作るメモ.txt」。
+
+以下は従来の「英語プロンプトを直接書く方式」のメモ。
+
+【普段の操作は3つ】
+1. このフォルダの .env をメモ帳で開き、WORLD_LABS_API_KEY の値だけを新しいキーに変えて保存する。
+   HPCやCAMSの設定は、そのままでよい。キーは他人に見せない。
+2. config\world_prompt.txt を開き、作りたい街の説明へ変更して保存する。
+   地名と国名を入れる。例：Rothenburg ob der Tauber, Germany。
+3. このフォルダの「世界を作る.cmd」をダブルクリックする。
+
+PowerShellで行う場合も同じ処理：
+cd C:\Users\Astra\Desktop\prague
+.\.venv\Scripts\python.exe -X utf8 run.py build
+
+古い「python world.py generate」ではなく、今は「run.py build」が全体の入口。
+現在の world_prompt.txt はドイツ・ローテンブルクの説明。
+
+【この1回で自動的に進む範囲】
+地名の抽出
+→ 緯度・経度・標高・タイムゾーンの取得
+→ 日時の決定、気象・CAMS大気データの取得
+→ World Labsで世界生成、HQのテクスチャ付きGLB取得
+→ 空の蓋と破片の除去、HPCによる建物の誤除去確認・保護の繰り返し
+→ 灰色の空面・細い線の追加検知、除去、疑わしい建物部分の復元と再確認（最大6回）
+→ Principled BSDF化、自発光・環境光ゼロ、カメラ・ライトの除去
+→ HPCで窓・街灯・ランタンを検出、3D位置・向き・候補領域を記録
+→ 地点・日時・標高・大気に対応する太陽と空を初期Blenderへ設定
+→ 検出マーカーとカメラ位置の土台を保存
+
+普段はPythonプログラムが順に処理する。毎回GPTへ手順を指示する必要はない。
+初期設定では本撮影と道路の追加探索を行わない。
+清掃確認と検出用の内部画像は作る。これらは本撮影の写真セットとは別。
+窓の発光、街灯ライトの配置、照明用の材質変更、機械学習の実行はしない。
+検出は候補の記録なので、後で照明を置く前には位置を確認する。
+
+【完成したら、どれを開く？】
+・street_initial.blend
+  地点と日時から計算した太陽・空、大気データ、窓などの検出マーカーを持つ初期状態。
+  太陽はSkyテクスチャで表現する。Sunライトオブジェクトは置かない。
+  保存状態のカメラ・ライトオブジェクトは0。マーカーはEMPTY。
+・street_relight.blend / street_relight.glb
+  蓋を除去し、自発光・環境光を0にした、照明を置くための暗い素材。
+  元テクスチャに描かれている明暗は残る。
+・inventory\...\inventory.json
+  窓・街灯・ランタンの種類、3D位置などの検出記録。
+・camera.json
+  後で撮影するための位置・向きの土台。写真そのものではない。
+・result.json
+  その回の成果物のパスをまとめた案内。
+
+保存先は実行画面に表示される outputs\builds\日時\。
+照明ゼロの素材は outputs\sky_cleanup\..._polished\ に保存され、result.jsonから参照できる。
+過去の世界は別フォルダに残る。キーやプロンプトを変更しても削除しない。
+
+【途中で止まった場合】
+空の線・薄い面の自動検知 → 別コピーで除去 → 再描画 → 建物の欠損確認 → 残骸の再検査も接続済み。
+新規生成・未完了の再開で自動実行する。最大6回、形状不変2回、小さい改善2回で打ち切る。
+灰色の大きな空面も対象。色と輪郭で空と建物の境界を補正し、1回の削除は8%以下に小分けする。
+「空と分からない」視点を「建物だ」とは数えない。複数視点での空の確認と建物保護は継続する。
+候補が残る場合は「残骸の確認が必要」と出る。完全に除去できたと偽って終了しない。
+設定は config\sky_residual_policy.json。作業データは outputs\sky_residuals\、回数と保存先は入力側の residual_loop\status.json に残る。
+
+道路認識の mask2former.log には、HPC stage START/END と画像ごとの START/END が出る。
+順序は作業フォルダ作成 → 画像転送 → プログラム転送 → コンテナ/Python起動 → 認識 → 結果取得。
+接続・フォルダ作成などは最長2分、画像転送・結果取得は最長5分で停止し、該当段階を表示する。
+HPC側のコンテナ・認識も最長20分（停止猶予30秒）。Windows側で止めても永久には残らない。
+停止後は下記の同じ保存先への再開コマンドを使う。保存済みGLBを再生成する必要はない。
+
+HPC応答の途切れやサーバーの一時エラーは自動で再試行する。続けて失敗した場合は記録を残して停止する。
+同じプロンプトで同じ build コマンドを実行すると、未完了の最新ジョブを再開する。
+プロンプトを変更すると別の街として新しい保存先を作る。
+完了後に build を再実行した場合も新規生成になるので、結果を見るだけならファイルを開く。
+
+保存済みの条件を変えず、最新ジョブを再開する：
+.\.venv\Scripts\python.exe -X utf8 run.py build --resume
+
+街を指定して再開する：
+ウィーン
+.\.venv\Scripts\python.exe -X utf8 run.py build --resume --run-dir outputs/builds/20261109_234836_223354
+ドイツ・ローテンブルク
+.\.venv\Scripts\python.exe -X utf8 run.py build --resume --run-dir outputs/builds/20261110_083134_011934_rothenburg
+
+再開は保存済みのAPI処理を再利用する。正常なGLBがあればWorld APIへ再照会せず後処理へ進む。
+GLB取得前に停止した街を再開するときは、その街を生成したWorldキーを使う。
+同じジョブを二重起動しない。スリープ中はPC上の処理が進まない。
+実行中に .env を変えても、そのプロセスは起動時のWorldキーを使い続ける。
+
+【日時と大気の初期値】
+プロンプトに季節と時間帯などの条件がそろえば、それを使って日時を選ぶ。
+指定が足りないときは config\build_world.json の2026年7月15日・現地12時を使う。
+気象とCAMSの参照年は2025年。実行日のリアルタイム天気という意味ではない。
+特定の日時にしたい場合は新規開始時に指定する：
+.\.venv\Scripts\python.exe -X utf8 run.py build --date 2026-11-10 --time 12:00
+
+【残高と料金】
+残高照会だけ：
+.\.venv\Scripts\python.exe -X utf8 run.py credits
+
+今回の標準設定 marble-1.1 は、世界生成1,580＋HQ GLB作成3,500＝5,080クレジット。
+残高7,000からなら1,920が残る計算。実際の残高は上のコマンドで確認する。
+HPCなどの利用はWorld Labsのクレジットとは別。Plusモデルは料金が異なる。
+
+【後で道路探索と本撮影も追加したい場合だけ】
+以下の「対象の保存先」を、その街の outputs\builds\... に置き換える。
+.\.venv\Scripts\python.exe -X utf8 run.py build --resume --with-capture --run-dir "対象の保存先"
+道路認識・歩行経路・360度カメラ計画を作り、大気付き画像を保存する。
+窓や街灯への照明配置は、このコマンドにも含まれない。
+
+詳しい個別コマンドは docs\COMMANDS_JA.md。
+以前の長いメモは docs\実行メモ_旧版_20261110.txt に保存してある。

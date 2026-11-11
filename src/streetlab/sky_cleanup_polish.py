@@ -83,7 +83,24 @@ def parse_audit(raw, ids):
     return data
 
 
+def parse_or_repair_audit(raw,ids,cache,env_file=None,model=DEFAULT_MODEL):
+    try:return parse_audit(raw,ids)
+    except (ValueError,KeyError,TypeError):
+        from streetlab.hpc_json import repair
+        data,repaired=repair(raw,lambda text:parse_audit(text,ids),
+            '{"views":[{"id":"<provided id>","polygons":[[[x,y],...]],"reason":"..."}]}',
+            ids,env_file=env_file,model=model)
+        cache.with_suffix('.repaired.txt').write_text(repaired,encoding='utf-8')
+        return data
+
+
 def clean_visible_specks(output):
+    from streetlab.sky_cleanup import polygon_sky_mask
+    from streetlab.sky_semantics import allowed as allowed_protection
+    source=Path(json.loads((output/'polish_job.json').read_text())['input'])
+    protection_path=source/'sky_protection_review.json'
+    protection=json.loads(protection_path.read_text(encoding='utf-8')) if protection_path.exists() else {'views':[]}
+    protected_polygons={v['id']:v.get('protected_polygons',[]) for v in protection['views']}
     for iteration in range(2):
         found=0
         for path in sorted(output.glob('view_*_after.png')):
@@ -93,13 +110,17 @@ def clean_visible_specks(output):
             border=np.unique(np.concatenate((labels[0],labels[-1],labels[:,0],labels[:,-1])))
             isolated=(sizes>=3)&(sizes<=foreground.size*.002)
             isolated[border]=False;isolated[0]=False
-            mask=isolated[labels];found+=int(isolated.sum())
+            mask=isolated[labels]
+            view_id=path.stem.removesuffix('_after')
+            mask &= ~(polygon_sky_mask(mask.shape,protected_polygons.get(view_id,[]))
+                & allowed_protection(source,view_id,mask.shape))
+            found+=int(mask.any())
             Image.fromarray(mask.astype('uint8')*255).save(path.with_name(path.stem.replace('_after','_isolated_mask')+'.png'))
         if not found:return
-        print(f'最後の小片を確認: {found} 個',flush=True)
+        print(f'最後の小片を確認: {found} 視点',flush=True)
         with (output/f'specks_{iteration}.log').open('w',encoding='utf-8') as log:
             result=subprocess.run([str(find_blender()),'--background','--factory-startup','--python-exit-code','1','--python',str(CODE_DIR / 'sky_cleanup_specks_blender.py'),'--',str(output)],stdout=log,stderr=subprocess.STDOUT)
-        if result.returncode:raise RuntimeError('Final speck cleanup failed')
+        if result.returncode:raise RuntimeError('最後の小片除去で停止しました。詳細: '+str(output/f'specks_{iteration}.log'))
 
 
 def save_clean_scene(output):
@@ -144,7 +165,7 @@ def main(argv=None):
         if cache.exists():
             data=parse_audit(cache.read_text(encoding='utf-8'),ids)
         elif cache.with_suffix('.txt').exists():
-            data=parse_audit(cache.with_suffix('.txt').read_text(encoding='utf-8'),ids)
+            data=parse_or_repair_audit(cache.with_suffix('.txt').read_text(encoding='utf-8'),ids,cache,args.env_file,args.model)
             cache.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding='utf-8')
         else:
             if client is None:
@@ -167,7 +188,8 @@ def main(argv=None):
                 content.extend([{'type':'text','text':view['id']},{'type':'image_url','image_url':{'url':'data:image/png;base64,'+base64.b64encode(buf.getvalue()).decode()}}])
             print(f'3.8で残りを確認: {ids}',flush=True)
             response=client.chat.completions.create(model=args.model,reasoning_effort='none',stream=True,max_tokens=4500,
-                messages=[{'role':'system','content':PROMPT},{'role':'user','content':content}])
+                messages=[{'role':'system','content':PROMPT+'\nReturn exactly these view IDs, once each: '+json.dumps(ids)},
+                          {'role':'user','content':[{'type':'text','text':'There are '+str(len(ids))+' camera views. Return only these IDs: '+json.dumps(ids)}]+content}])
             parts=[];finish=None
             try:
                 for chunk in response:
@@ -178,7 +200,7 @@ def main(argv=None):
             raw=''.join(parts)
             cache.with_suffix('.txt').write_text(raw,encoding='utf-8')
             if finish!='stop':raise ValueError('Audit incomplete')
-            data=parse_audit(raw,ids)
+            data=parse_or_repair_audit(raw,ids,cache,args.env_file,args.model)
             cache.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding='utf-8')
         all_views.extend(data['views'])
     for view in all_views:

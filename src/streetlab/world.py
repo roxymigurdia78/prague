@@ -22,8 +22,8 @@ JST = timezone(timedelta(hours=9))
 GENERATION_CREDITS = {"marble-1.1": (1580, 1580), "marble-1.1-plus": (1580, 3080)}
 
 
-def generation_payload(model, name):
-    text = (ROOT / "config" / "world_prompt.txt").read_text(encoding="utf-8-sig").strip()
+def generation_payload(model, name, prompt_file=None):
+    text = Path(prompt_file or ROOT / "config" / "world_prompt.txt").read_text(encoding="utf-8-sig").strip()
     if not text:
         raise ValueError("config/world_prompt.txt に作りたい世界の説明文を入力してください。")
     return {
@@ -208,6 +208,7 @@ def main(argv=None):
     parser.add_argument("--asset", choices=["splats", "collider", "panorama", "thumbnail"])
     parser.add_argument("--run-dir", type=Path, help="以前の結果を指定する保存フォルダー（省略時は最新）")
     parser.add_argument("--resume", action="store_true", help="最新の生成を再開・確認する（新規生成しない）")
+    parser.add_argument("--prompt-file", type=Path, help="この生成専用の説明文ファイル")
     parser.add_argument("--model", choices=GENERATION_CREDITS, default=None,
                         help="生成モデル（省略時はmarble-1.1、再開時は元のモデル）")
     parser.add_argument("--dry-run", action="store_true", help="生成内容を表示するだけ（API呼び出し・保存なし）")
@@ -220,10 +221,12 @@ def main(argv=None):
         parser.error("--resumeはgenerateで指定してください。")
     if args.model is not None and args.action != "generate":
         parser.error("--modelはgenerateで指定してください。")
+    if args.prompt_file is not None and (args.action != "generate" or args.resume):
+        parser.error("--prompt-fileは新規generateで指定してください。")
     if args.dry_run:
         if args.action != "generate" or args.resume or args.run_dir is not None:
             parser.error("--dry-runは新規generateの内容確認用です。--resume / --run-dirとは併用できません。")
-        payload = generation_payload(args.model or "marble-1.1", datetime.now(JST).strftime("%Y%m%d_%H%M%S"))
+        payload = generation_payload(args.model or "marble-1.1", datetime.now(JST).strftime("%Y%m%d_%H%M%S"), args.prompt_file)
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         print("内容確認のみ：APIは呼ばず、フォルダーも作成していません。")
         return
@@ -245,7 +248,7 @@ def main(argv=None):
         elif (OUT / "generate_operation.json").exists() or (OUT / "generate_submission_pending.json").exists():
             payload = {}  # 既存処理の確認のみ。新しいPOSTには使わない。
         else:
-            payload = generation_payload(args.model or "marble-1.1", OUT.name)
+            payload = generation_payload(args.model or "marble-1.1", OUT.name, args.prompt_file)
         world = operation(key, "generate", "worlds:generate", payload)
         if not world.get("world_id"):
             raise RuntimeError("完了応答にworld_idがありません。generate_operation.jsonを確認してください。")

@@ -11,6 +11,13 @@ from mathutils.bvhtree import BVHTree
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from streetlab.sky_cleanup_blender import coordinates, visible_sky_faces, remove_floaters, RegionViews, render, save_json
 from streetlab.sky_cleanup import refine_cut_boundary, refine_open_boundary
+from streetlab.sky_cleanup import polygon_sky_mask
+from streetlab.sky_semantics import allowed as allowed_protection
+
+
+def semantic_artifact_faces(*args,**kwargs):
+    """An automated VLM enclosure must respect other visible building views."""
+    return visible_sky_faces(*args,allow_surrounded=False,**kwargs)
 
 
 def project_coverage(xyz,indices,regions):
@@ -51,6 +58,10 @@ def main(output):
     depsgraph=bpy.context.evaluated_depsgraph_get()
     regions=RegionViews()
     semantic_regions=RegionViews()
+    protection_path=source/'sky_protection_review.json'
+    protection=json.loads(protection_path.read_text(encoding='utf-8')) if protection_path.exists() else {'views':[]}
+    polygons={v['id']:v.get('protected_polygons',[]) for v in protection['views']}
+    regions.protected={};semantic_regions.protected={}
     for view in views['views']:
         camera=bpy.data.objects[view['id']]
         image=bpy.data.images.load(str(output/(view['id']+'_polish_mask.png')),check_existing=False)
@@ -58,11 +69,17 @@ def main(output):
         values=np.empty(w*h*4,dtype=np.float32);image.pixels.foreach_get(values)
         mask=values.reshape(h,w,4)[::-1,:,0]>.5
         bpy.data.images.remove(image)
+        protected=(polygon_sky_mask(mask.shape,polygons.get(view['id'],[]))
+            & allowed_protection(source,view['id'],mask.shape))
+        mask &= ~protected
+        regions.protected[camera.name]=protected
+        semantic_regions.protected[camera.name]=protected
         projection=np.asarray(camera.calc_matrix_camera(depsgraph,x=w,y=h))@np.asarray(camera.matrix_world.inverted())
         regions.append((camera,projection,mask))
         image=bpy.data.images.load(str(output/(view['id']+'_semantic_mask.png')),check_existing=False)
         values=np.empty(w*h*4,dtype=np.float32);image.pixels.foreach_get(values)
         semantic=values.reshape(h,w,4)[::-1,:,0]>.5
+        semantic &= ~protected
         bpy.data.images.remove(image)
         semantic_regions.append((camera,projection,semantic))
     # Refine only triangles that cross the cleanup boundary. Preserve UV interpolation.
@@ -96,29 +113,33 @@ def main(output):
             remaining=np.flatnonzero(~removed)
             tree=BVHTree.FromPolygons(local.tolist(),indices[remaining].tolist(),all_triangles=True)
             current=[entry for entry in trees if entry[0]!=obj]+[(obj,tree,remaining)]
-            # Shape-only trimming requires agreement across views. Explicitly reviewed
-            # artifact enclosures can be supported by a single visible observation.
+            # Both geometric and VLM proposals must respect contrary observations.
+            # A single positive view is enough only if no other visible view objects.
             extra=visible_sky_faces(obj,indices,xyz,upper&~removed,regions,current,
-                reference_trees=trees,maximum_depth=span*.03)
-            extra|=visible_sky_faces(obj,indices,xyz,upper&~removed,semantic_regions,current,
-                require_consensus=False,reference_trees=trees,maximum_depth=semantic_depth)
+                allow_surrounded=False,reference_trees=trees,maximum_depth=span*.03)
+            semantic_regions.protected_faces=getattr(regions,'protected_faces',{})
+            extra|=semantic_artifact_faces(obj,indices,xyz,upper&~removed,semantic_regions,current,
+                reference_trees=trees,maximum_depth=semantic_depth)
             count=int(extra.sum());print('Polish layer',step+1,count,flush=True)
             if not count:converged=True;break
             removed|=extra;layers.append(count)
         # A depth-limited cut may detach the back of a thick scrap. Once detached,
         # remove its complete connected component, without opening the building behind.
-        contexts=RegionViews();contexts.contexts={}
+        contexts=RegionViews();contexts.contexts={};contexts.protected=regions.protected
+        contexts.protected_faces=getattr(regions,'protected_faces',{})
         for (camera,projection,mask),(_,_,semantic) in zip(regions,semantic_regions):
             context=mask|semantic
             contexts.append((camera,projection,context));contexts.contexts[camera.name]=context
         remaining=np.flatnonzero(~removed)
         tree=BVHTree.FromPolygons(local.tolist(),indices[remaining].tolist(),all_triangles=True)
         current=[entry for entry in trees if entry[0]!=obj]+[(obj,tree,remaining)]
-        extra,floaters=remove_floaters(obj,indices,xyz,removed,contexts,current,height_gate,span,allow_strong_context=True)
+        extra,floaters=remove_floaters(obj,indices,xyz,removed,contexts,current,height_gate,span)
         removed|=extra
         print('Detached residual fragments',len(floaters),int(extra.sum()),flush=True)
         if removed.mean()>.15:raise ValueError('Residual trim exceeds safety limit')
-        new_xyz,adjustment=refine_cut_boundary(xyz,indices,removed,height_gate,span*.0025,iterations=5)
+        preserve_geometry=any(mask.any() for mask in regions.protected.values())
+        new_xyz,adjustment=refine_cut_boundary(xyz,indices,removed,height_gate,span*.0025,iterations=5,
+            preserve_geometry=preserve_geometry)
         inverse=np.asarray(obj.matrix_world.inverted())
         obj.data.vertices.foreach_set('co',(new_xyz@inverse[:3,:3].T+inverse[:3,3]).astype(np.float32).ravel())
         attr=obj.data.attributes.new('_polish_selected','INT','FACE')
@@ -138,7 +159,8 @@ def main(output):
         details.append({'object':obj.name,'faces':int(removed.sum()),'layers':layers,'converged':converged,'boundary_adjustment':adjustment,'detached_fragments':floaters})
         world=coordinates(obj)
         triangles=np.asarray([p.vertices[:] for p in obj.data.polygons])
-        world,open_adjustment=refine_open_boundary(world,triangles,height_gate,span*.008)
+        world,open_adjustment=refine_open_boundary(world,triangles,height_gate,span*.008,
+            preserve_geometry=preserve_geometry)
         obj.data.vertices.foreach_set('co',(world@inverse[:3,:3].T+inverse[:3,3]).astype(np.float32).ravel())
         obj.data.update()
         details[-1]['open_boundary_adjustment']=open_adjustment
@@ -150,9 +172,14 @@ def main(output):
             raise ValueError('Mesh validation did not converge')
         details[-1]['mesh_repaired']=bool(repaired)
     bpy.ops.object.select_all(action='DESELECT')
+    candidate_names=[candidate.name for candidate in candidates]
     for obj in objects:obj.select_set(True)
     bpy.ops.export_scene.gltf(filepath=str(output/'street_without_sky.glb'),export_format='GLB',use_selection=True,export_animations=False)
     bpy.ops.wm.save_as_mainfile(filepath=str(output/'sky_review.blend'))
+    bpy.ops.wm.open_mainfile(filepath=str(output/'sky_review.blend'))
+    scene=bpy.context.scene
+    objects=[obj for obj in scene.objects if obj.type=='MESH' and obj.get('sky_source') and not obj.get('sky_removed')]
+    candidates=[bpy.data.objects[name] for name in candidate_names]
     for view in views['views']:
         render(scene,bpy.data.objects[view['id']],output,view['id']+'_after')
     red=bpy.data.materials.new('Additional artifact cleanup');red.diffuse_color=(1,0,0,1);red.use_nodes=True
@@ -165,6 +192,7 @@ def main(output):
         render(scene,bpy.data.objects[view['id']],output,view['id']+'_overlay')
     save_json(output/'report.json',{'input':str(source),'model':job['model'],'minimum_z':height_gate,
         'kept_faces':sum(len(o.data.polygons) for o in objects),'details':details,
+        'multiview_consensus':True,'single_view_override':False,
         'method':'residual_semantic_artifacts_and_silhouette_opening',
         'limitations':['Does not reconstruct missing architecture or deblur original textures.','View-dependent cleanup is restricted to the observed upper region.']})
 
