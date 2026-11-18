@@ -73,6 +73,17 @@ class SkyCleanupTests(unittest.TestCase):
         self.assertTrue(result[:,:15].all())
         self.assertFalse(result[:,15:].any())
 
+    def test_adaptive_growth_preserves_darker_neutral_plaster(self):
+        image=np.full((12,24,3),(.70,.71,.72),dtype=np.float32)
+        # A soft transition lets a local-edge check cross the roof boundary.
+        for x in range(8,16):
+            amount=(x-7)/8
+            image[:,x]=(1-amount)*np.array([.70,.71,.72])+amount*np.array([.56,.55,.52])
+        image[:,16:]=(.56,.55,.52)
+        result=sky.connected_sky(image,[[100,500]],tolerance=.14,adaptive=True)
+        self.assertTrue(result[:,:8].all())
+        self.assertFalse(result[:,16:].any())
+
     def test_component_analysis_welds_uv_seams_and_keeps_detached_fragment_separate(self):
         xyz=np.array([[0,0,0],[1,0,0],[0,1,0],
                       [1,0,0],[1,1,0],[0,1,0],
@@ -112,6 +123,43 @@ class SkyCleanupTests(unittest.TestCase):
         self.assertLessEqual(summary['maximum_displacement'],.0500001)
         np.testing.assert_array_equal(result[3:6],xyz[3:6])
         np.testing.assert_array_equal(result[9],xyz[9])
+
+    def test_excessive_speck_back_layers_fall_back_to_visible_seed_only(self):
+        result,report=sky.bounded_speck_selection(range(100),{1,2,999},10000)
+        self.assertEqual(result,{1,2})
+        self.assertEqual(report['mode'],'visible_only')
+        self.assertLessEqual(len(result),report['limit_faces'])
+
+    def test_excessive_visible_specks_preserve_original_geometry(self):
+        result,report=sky.bounded_speck_selection(range(100),range(60),10000)
+        self.assertFalse(result)
+        self.assertEqual(report['mode'],'kept_original')
+
+    def test_small_speck_selection_is_unchanged(self):
+        result,report=sky.bounded_speck_selection({1,2,3},{1,2},10000)
+        self.assertEqual(result,{1,2,3})
+        self.assertEqual(report['mode'],'full')
+
+    def test_building_protection_preserves_original_cut_edge_positions(self):
+        xyz=np.array([[0,0,2],[1,.2,2],[2,0,2],[0,-1,2],[1,-1,2],[2,-1,2],
+                      [0,1,2],[1,1,2],[2,1,2]],dtype=float)
+        triangles=np.array([[0,1,3],[1,4,3],[1,2,4],[2,5,4],
+                            [0,6,1],[1,6,7],[1,7,2],[2,7,8]])
+        removed=np.array([False]*4+[True]*4)
+        ordinary,_=sky.refine_cut_boundary(xyz,triangles,removed,1,.05)
+        self.assertFalse(np.array_equal(ordinary,xyz))
+        protected,summary=sky.refine_cut_boundary(xyz,triangles,removed,1,.05,preserve_geometry=True)
+        np.testing.assert_array_equal(protected,xyz)
+        self.assertEqual(summary['maximum_displacement'],0)
+
+    def test_building_protection_preserves_original_open_roof_edges(self):
+        xyz=np.array([[0,0,2],[1,.2,2],[2,0,2],[0,-1,2],[1,-1,2],[2,-1,2]],dtype=float)
+        triangles=np.array([[0,1,3],[1,4,3],[1,2,4],[2,5,4]])
+        ordinary,_=sky.refine_open_boundary(xyz,triangles,1,.05)
+        self.assertFalse(np.array_equal(ordinary,xyz))
+        protected,summary=sky.refine_open_boundary(xyz,triangles,1,.05,preserve_geometry=True)
+        np.testing.assert_array_equal(protected,xyz)
+        self.assertEqual(summary['maximum_displacement'],0)
 
     def test_vlm_requires_exact_views_and_valid_coordinates(self):
         good = {"views": [{"id": "view_00", "points": [[500, 100]], "reason": "sky"}]}

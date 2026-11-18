@@ -1,11 +1,5 @@
-Photorealistic eye-level view of a narrow, winding medieval street in
-Prague's Old Town. Uneven cobblestone pavement, tall gothic and
-romanesque stone houses with weathered plaster facades in muted pastel
-tones, small arched doorways with heavy wooden doors, wrought-iron
-balconies and hanging shop signs, unlit street lanterns, stone arcades.
-Rich fine detail: worn stone textures, cracks, moss between the
-cobblestones, aged wood grain. Immersive, as if standing in the street.
-No people, no cars.
-Lighting: flat, uniform, overcast diffuse light, no direct sunlight,
-no cast shadows, no specular highlights, no bloom, no color grading,
-neutral white balance, evenly lit everywhere.
+An immersive, photorealistic, life-size, explorable street environment inspired by the medieval old town of Rothenburg ob der Tauber, Germany. The viewer stands at pedestrian eye level on a gently curving cobblestone lane that opens onto a modest market square, with a connected narrow side alley. Continuous buildings surround the viewer, with believable street widths, human-scale proportions, and a clear walkable ground surface.
+
+Two- and three-story Franconian half-timbered houses with exposed dark weathered oak beams, cream and muted ochre plaster infill, steep red clay-tile roofs, varied gables, small dormer windows, and stone ground-floor foundations. Mix timber-framed houses with a few simple historic plaster townhouses. Add deep-set wooden doors, small divided-pane windows, understated wooden shutters, wrought-iron hanging shop signs, wall-mounted historic lanterns, and one plain wooden bench against a facade. Fine material detail: aged timber grain, slightly uneven plaster, worn sandstone thresholds, individual matte cobbles, and restrained moss in pavement joints. Keep the square and the center of the lane unobstructed.
+
+Lighting: solid overcast daytime sky, soft flat uniform diffuse illumination, neutral white balance, no direct sunlight, no hard cast shadows, no bright highlights, no bloom, no dramatic color grading. Dry matte pavement, no rain or puddles. All street lanterns, shop lights, and interior window lights are switched off; no glowing or emissive surfaces. No people, cars, bicycles, or modern billboards. A full-scale surrounding environment with plausible depth, not a miniature or an isolated architectural model.

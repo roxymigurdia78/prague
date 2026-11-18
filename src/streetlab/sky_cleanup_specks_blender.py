@@ -5,7 +5,9 @@ import bpy,bmesh,numpy as np
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from streetlab.sky_cleanup_blender import nearest_face,coordinates,render
+from streetlab.sky_cleanup_blender import nearest_face,coordinates,render,RegionViews,ensure_protected_owners
+from streetlab.sky_cleanup import polygon_sky_mask,bounded_speck_selection
+from streetlab.sky_semantics import allowed as allowed_protection
 
 
 def main(folder):
@@ -17,6 +19,29 @@ def main(folder):
     trees=[(o,BVHTree.FromObject(o,bpy.context.evaluated_depsgraph_get())) for o in objects]
     xyz={o:coordinates(o) for o in objects}
     selected={o:set() for o in objects}
+    source=Path(json.loads((folder/'polish_job.json').read_text())['input'])
+    protection_path=source/'sky_protection_review.json'
+    protection=json.loads(protection_path.read_text()) if protection_path.exists() else {'views':[]}
+    polygons={v['id']:v.get('protected_polygons',[]) for v in protection['views']}
+    regions=RegionViews()
+    regions.protected={}
+    graph=bpy.context.evaluated_depsgraph_get()
+    for view in manifest['views']:
+        camera=bpy.data.objects[view['id']]
+        h,w=scene.render.resolution_y,scene.render.resolution_x
+        mask=polygon_sky_mask((h,w),polygons.get(view['id'],[])) & allowed_protection(source,view['id'],(h,w))
+        if mask.any():
+            projection=np.asarray(camera.calc_matrix_camera(graph,x=w,y=h))@np.asarray(camera.matrix_world.inverted())
+            regions.append((camera,projection,mask))
+            regions.protected[camera.name]=mask
+
+    building_faces=ensure_protected_owners(regions,trees)
+
+    def retain_buildings():
+        for obj in objects:
+            if not selected[obj] or not regions:
+                continue
+            selected[obj].difference_update(building_faces.get(obj.name,set()))
     rays=[]
     for view in manifest['views']:
         path=folder/(view['id']+'_isolated_mask.png')
@@ -39,11 +64,14 @@ def main(folder):
                 if vertices[:,2].min()>=report['minimum_z']:
                     selected[obj].add(index)
                     rays.append((camera.matrix_world.translation.copy(),direction,distance))
+    retain_buildings()
+    first_visible={obj:set(ids) for obj,ids in selected.items()}
     # Resolve the back layers of each tiny island without rendering every layer.
     local={o:np.asarray([v.co[:] for v in o.data.vertices]) for o in objects}
     triangles={o:np.asarray([p.vertices[:] for p in o.data.polygons]) for o in objects}
     span=manifest['height_high']-manifest['height_low']
     for iteration in range(16):
+        before_count=sum(map(len,selected.values()))
         current=[]
         for obj in objects:
             keep=np.ones(len(triangles[obj]),dtype=bool);keep[list(selected[obj])]=False
@@ -57,10 +85,16 @@ def main(folder):
             if distance-initial_distance>span*.3:continue
             if xyz[obj][triangles[obj][index],2].min()>=report['minimum_z'] and index not in selected[obj]:
                 selected[obj].add(index);additional+=1
+        retain_buildings()
+        additional=sum(map(len,selected.values()))-before_count
         if not additional:break
     degenerate_total=0
+    bounded_fallbacks=[]
     for obj in objects:
-        if len(selected[obj])>len(obj.data.polygons)*.005:raise ValueError('Final speck removal exceeds limit')
+        selected[obj],decision=bounded_speck_selection(selected[obj],first_visible[obj],len(obj.data.polygons))
+        if decision['mode']!='full':
+            bounded_fallbacks.append({'object':obj.name,**decision})
+            print('Speck safety fallback:',obj.name,decision,flush=True)
         corners=xyz[obj][triangles[obj]]
         area=np.linalg.norm(np.cross(corners[:,1]-corners[:,0],corners[:,2]-corners[:,0]),axis=1)
         f32=corners.astype(np.float32)
@@ -91,7 +125,8 @@ def main(folder):
         bpy.ops.wm.save_as_mainfile(filepath=str(folder/'sky_review.blend'))
         for view in manifest['views']:render(scene,bpy.data.objects[view['id']],folder,view['id']+'_after')
     report['kept_faces']=sum(len(o.data.polygons) for o in objects)
-    report.setdefault('final_speck_passes',[]).append({'faces':total,'degenerate_faces':degenerate_total})
+    report.setdefault('final_speck_passes',[]).append({'faces':total,'degenerate_faces':degenerate_total,
+        'bounded_fallbacks':bounded_fallbacks})
     (folder/'report.json').write_text(json.dumps(report,indent=2))
     print('Final isolated faces:',total,flush=True)
 

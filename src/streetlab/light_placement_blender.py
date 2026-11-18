@@ -55,7 +55,9 @@ def cameras(scene,positions,job,r):
 
 
 def render(scene,camera,path):
-    scene.camera=camera;scene.render.filepath=str(path);bpy.ops.render.render(write_still=True)
+    scene.camera=camera;scene.render.filepath=str(path)
+    bpy.context.view_layer.update()
+    bpy.ops.render.render(write_still=True)
 
 
 def neutral(scene):

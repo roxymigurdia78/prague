@@ -1,0 +1,6 @@
+{
+  "endpoint": "https://geocoding-api.open-meteo.com/v1/search",
+  "usage": "non-commercial",
+  "language": "ja",
+  "count": 5
+}

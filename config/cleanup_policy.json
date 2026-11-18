@@ -1,0 +1,6 @@
+{
+  "max_reviews": 6,
+  "stable_rounds": 2,
+  "max_new_protected_fraction": 0.0001,
+  "max_face_change_fraction": 0.001
+}

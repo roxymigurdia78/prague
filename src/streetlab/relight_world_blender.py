@@ -4,6 +4,8 @@ from pathlib import Path
 
 import bpy
 
+from streetlab.north_orientation import ensure_north
+
 
 def upstream(start):
     found=set()
@@ -52,6 +54,8 @@ def save_relight_scene(folder):
     folder=Path(folder)
     meshes=[o for o in bpy.context.scene.objects if o.type=='MESH']
     if not meshes:raise ValueError('No street geometry')
+    # Keep one north per generated world, including re-runs from a checkpoint.
+    north = ensure_north(bpy.context.scene, path=folder/'north.json')
     materials={slot.material for obj in meshes for slot in obj.material_slots if slot.material}
     if any(not obj.material_slots for obj in meshes):raise ValueError('Street mesh has no material')
     converted=[convert_material(m) for m in sorted(materials,key=lambda m:m.name)]
@@ -63,6 +67,7 @@ def save_relight_scene(folder):
         world.use_nodes=True
         nodes=world.node_tree.nodes;nodes.clear()
         background=nodes.new('ShaderNodeBackground')
+        background.name='Background'
         background.inputs['Color'].default_value=(0,0,0,1)
         background.inputs['Strength'].default_value=0
         output=nodes.new('ShaderNodeOutputWorld')
@@ -93,6 +98,7 @@ def save_relight_scene(folder):
             shader=output.inputs['Surface'].links[0].from_node
             assert shader.type=='BSDF_PRINCIPLED' and shader.inputs['Emission Strength'].default_value==0
     report={'materials':converted,'world_strength':0,'cameras':0,'lights':0,
+            'north':north,
             'faces':sum(len(o.data.polygons) for o in bpy.data.objects if o.type=='MESH'),
             'blend':str(target),'glb':str(glb),
             'note':'Baked shadows and light colors in the original texture are retained; this is not inverse rendering.'}

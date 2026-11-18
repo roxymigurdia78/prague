@@ -24,7 +24,24 @@ class InventoryTests(unittest.TestCase):
         data={'views':[{'id':'x','objects':[obj]}]}
         self.assertEqual(parse_inventory(json.dumps(data),['x']),data)
         obj['confidence']=float('nan')
-        with self.assertRaises(ValueError):parse_inventory(json.dumps(data),['x'])
+        parsed=parse_inventory(json.dumps(data),['x'])
+        self.assertEqual(parsed['views'][0]['objects'],[])
+        self.assertEqual(parsed['views'][0]['dropped_invalid_objects'],1)
+
+    def test_malformed_object_is_dropped_and_bare_list_is_accepted(self):
+        good={'kind':'window','appearance':'dark','center':[500,500],'bbox':[400,400,600,600],'confidence':.9}
+        bad={'kind':[211,660],'bbox':[190,620,230,700],'confidence':.95,'appearance':'reflective'}
+        parsed=parse_inventory(json.dumps([{'id':'x','objects':[good,bad,'junk']}]),['x'])
+        self.assertEqual(parsed['views'][0]['objects'],[good])
+        self.assertEqual(parsed['views'][0]['dropped_invalid_objects'],2)
+        with self.assertRaises(ValueError):parse_inventory(json.dumps({'views':[{'id':'y','objects':[]}]}),['x'])
+
+    def test_more_than_35_objects_keeps_most_confident(self):
+        objs=[{'kind':'window','appearance':'dark','center':[500,500],'bbox':[400,400,600,600],'confidence':round(.5+i/100,2)} for i in range(40)]
+        parsed=parse_inventory(json.dumps({'views':[{'id':'x','objects':objs}]}),['x'])
+        v=parsed['views'][0]
+        self.assertEqual(len(v['objects']),35);self.assertEqual(v['truncated_objects'],5)
+        self.assertEqual(min(o['confidence'] for o in v['objects']),.55)
 
     def test_close_adjacent_windows_need_region_overlap(self):
         def region(x):

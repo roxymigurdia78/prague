@@ -9,6 +9,8 @@ import json
 import math
 from pathlib import Path
 
+from streetlab.north_orientation import get_north, ensure_north, random_north, PROPERTY as NORTH_PROPERTY
+
 
 SCHEMA = 'blender_multiple_scattering/v1'
 OWNER = '_research_multiple_scattering'
@@ -103,7 +105,8 @@ def set_sky(scene=None, settings=None, **changes):
 
     Unspecified values retain their current state. Passing settings replaces all
     nine controls; keyword changes then override those settings. Geometry,
-    materials, cameras, light objects, renderer and exposure are not modified.
+    materials, cameras, light objects and renderer are not modified.
+    Creating a managed sky initializes exposure to 0 EV. Updates preserve it.
     A shared world is copied before updating, isolating the selected scene.
     """
     import bpy
@@ -152,6 +155,7 @@ def set_sky(scene=None, settings=None, **changes):
         world.node_tree.links.new(sky.outputs['Color'], background.inputs['Color'])
         world.node_tree.links.new(background.outputs['Background'], output.inputs['Surface'])
         scene.world = world
+        scene.view_settings.exposure = 0.0
     sky = _sky(world)
     sky.sky_type = 'MULTIPLE_SCATTERING'
     for name, prop in PROPERTIES.items():
@@ -187,3 +191,72 @@ def save_sky_settings(path, scene=None):
 
 def load_sky_settings(path, scene=None):
     return set_sky(scene, settings=read_settings(path))
+
+
+def solar_to_sky(elevation_deg, azimuth_deg, north_angle_deg):
+    """Map clockwise geographic azimuth to Blender Sky's clockwise-from-+Y angle.
+
+    North is stored counterclockwise from world +X. The returned unit vector
+    points towards the sun, not in the direction of incoming light rays.
+    """
+    for value in (elevation_deg, north_angle_deg):
+        if type(value) not in (int, float) or not math.isfinite(value):
+            raise ValueError('Solar and north angles must be finite numbers')
+    if not -90 <= elevation_deg <= 90:
+        raise ValueError('Sun elevation must be in [-90, 90] degrees')
+    if azimuth_deg is None:
+        if not math.isclose(abs(elevation_deg), 90, abs_tol=1e-7):
+            raise ValueError('Undefined azimuth is valid only at zenith or nadir')
+        azimuth_deg = 0.0  # Rotation is immaterial for a vertical direction.
+    if type(azimuth_deg) not in (int, float) or not math.isfinite(azimuth_deg):
+        raise ValueError('Sun azimuth must be finite')
+    theta = math.radians(north_angle_deg - azimuth_deg)
+    elevation = math.radians(elevation_deg)
+    return {'sun_elevation': float(elevation_deg),
+            'sun_rotation': (90 - north_angle_deg + azimuth_deg) % 360,
+            'sun_direction_world': [math.cos(elevation) * math.cos(theta),
+                                    math.cos(elevation) * math.sin(theta), math.sin(elevation)]}
+
+
+def set_sun(latitude, longitude, date, time, *, timezone_name=None, fold=None,
+            scene=None, north_seed=None, altitude=None):
+    """Calculate and apply solar position, creating fictional north only once.
+
+    Supply a time with explicit UTC offset (e.g. '18:30+02:00'), or provide an
+    IANA timezone_name with a local clock time. No implicit machine timezone.
+    Other sky controls, light objects and renderer retain their values.
+    The first managed sky starts at 0 EV; subsequent updates preserve exposure.
+    """
+    from datetime import date as Date, datetime
+    from streetlab.solar_math import solar_position, get_zone
+    from streetlab.time_selection import _local_time
+
+    day = Date.fromisoformat(date) if isinstance(date, str) else date
+    if type(day) is not Date or not isinstance(time, str):
+        raise ValueError('Use a date or YYYY-MM-DD and an ISO clock time')
+    when = datetime.fromisoformat(day.isoformat() + 'T' + time)
+    if when.utcoffset() is None:
+        if timezone_name is None:
+            raise ValueError('Supply timezone_name or an explicit UTC offset in time')
+        when = _local_time(day, time, get_zone(timezone_name), fold)
+    elif timezone_name is not None:
+        local = when.astimezone(get_zone(timezone_name))
+        if local.replace(tzinfo=None) != when.replace(tzinfo=None) or local.utcoffset() != when.utcoffset():
+            raise ValueError('Explicit UTC offset conflicts with timezone_name')
+        when = local
+    sun = solar_position(latitude, longitude, when)
+    scene = _scene(scene)
+    north = get_north(scene)
+    north = north if north is not None else random_north(seed=north_seed)
+    converted = solar_to_sky(sun['elevation_deg'], sun['azimuth_deg'], north['north_angle_deg'])
+    changes = {'sun_elevation': converted['sun_elevation'], 'sun_rotation': converted['sun_rotation']}
+    if altitude is not None:
+        changes['altitude'] = altitude
+    applied = set_sky(scene, **changes)  # All validation completes before north is persisted.
+    scene[NORTH_PROPERTY] = json.dumps(north, ensure_ascii=False, allow_nan=False)
+    result = {'schema': 'streetlab/sun-position/v1', 'latitude': latitude, 'longitude': longitude,
+              'local_datetime': when.isoformat(), 'timezone': timezone_name, 'north': north,
+              'solar_position': sun, 'sun_direction_world': converted['sun_direction_world'],
+              'sky_settings': applied.to_dict()}
+    scene['_research_sun_position'] = json.dumps(result, ensure_ascii=False, allow_nan=False)
+    return result

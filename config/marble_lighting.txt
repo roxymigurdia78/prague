@@ -1,0 +1,5 @@
+Photorealistic eye-level view, immersive, as if standing in the street.
+No people, no cars. Unlit street lanterns.
+Lighting: flat, uniform, overcast diffuse light, no direct sunlight,
+no cast shadows, no specular highlights, no bloom, no color grading,
+neutral white balance, evenly lit everywhere.
