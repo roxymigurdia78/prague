@@ -77,6 +77,23 @@ Blenderの `scripts/prague_lighting.py` も、その世界に保存した大気�
 HPCが指定した範囲は、前後画像で新しく空洞になった画素とも照合します。既に残っている壁や元から空だった部分だけの指定は、追加の修復として数えません。
 建物の保護がある場合は、輪郭を滑らかにする頂点移動も省いて元の形を優先します。
 
+## 初期Blenderから昼光の比較だけを撮影
+
+`build` と `conversation-build` に `--with-lighting-capture` を付けると、初期Blenderの保存後に昼光の比較画像を出します。初期シーンができている街は、`build --resume --with-lighting-capture --run-dir "その街の保存先"` で撮影だけ実行できます。世界生成、清掃、VLMによる再検出は走りません。
+
+```powershell
+# 初期シーンの保存先を指定して、昼の中から時刻を引き直す
+.\.venv\Scripts\python.exe -X utf8 run.py lighting-capture "outputs/builds/その街の保存先" --period 昼
+```
+
+時間帯だけが指定されていれば、保存済みの日付・場所で時間帯内の時刻を抽選します。時刻まで指定して保存した場合はその時刻を使います。`--period` を渡すと指定した時間帯で引き直します。北を8方向から1つ抽選し、街ごとの時刻・太陽方向・カメラを比較中は固定します。露出、ホワイトバランス（温度と色合い）、AgXのルック、太陽光、ワールド光、かすみを個別に比較します。
+
+`lighting-capture ... --mixed 24 --output "新しい保存先"` では、基準画像に加えて、複数の設定を同時に変えた24通りを撮影します。各設定の範囲を均等に試せるよう値を選び、組み合わせはシャッフルします。複数の街を指定すると、同じ組み合わせを各街に適用します。`capture_plan.json` に全設定と乱数の種を保存します。
+
+既定の保存先は各街の `lighting_capture/` です。`index.html` から全画像を見られます。各条件のPNG、Blenderファイル、設定JSONを保存し、同じ出力先で再実行すると撮影済みの条件を再利用します。別の抽選を試す場合は `--output` で新しい保存先を指定してください。
+
+WSLのBlenderを使う場合は、撮影コマンドに `--wsl-blender` でLinux側の実行ファイルのパスを渡せます。一括コマンドから撮影を呼ぶ場合は、同じパスを環境変数 `STREETLAB_LIGHTING_WSL_BLENDER` に設定します。
+
 ## 既に接続されていた大気付きの一括撮影
 
 `run.py capture` が、**元GLB → 蓋除去・消灯 → 保存済みCAMS大気を空へ反映 → 道路視点で撮影**をつなぐ既存の入口です。清掃済み `.blend` を渡した場合は清掃を省きます。
@@ -220,7 +237,7 @@ set_world_time("昼", r"C:\Users\Astra\Desktop\prague\outputs\atmosphere_referen
 
 ## 初期BlenderのGPU・表示
 
-新規一括生成と未完了ジョブの再開には、空の線・灰色の大きな面の検知・境界補正・除去・再描画・建物欠損の確認を接続済みです。最大6回で、残骸が残った場合はログと`result.json`の`sky_residual_cleanup.needs_review`に明示します。完成済みの街は`build --resume --refine-sky --run-dir outputs/builds/20261110_083134_011934_rothenburg`で再清掃し、元を残した初期Blenderの修正版を作れます。設定と停止条件は[蓋除去と消灯](SKY_CLEANUP.md)を参照してください。
+新規一括生成と未完了ジョブの再開には、空の線・小さな孤立片・灰色の大きな面の検知・境界補正・除去・再描画・建物欠損の確認を接続済みです。黒い小片も対象だけの拡大表示と周囲の文脈で精査します。既定では修正が進む間の回数上限を設けず、通常検査と元解像度の細部検査の両方で候補なしの場合だけ完了します。判定不能で進めない場合は未完了として止め、一括処理は新しい初期シーンや後続の照明探索へ進みません。完成済みの街は `build --resume --refine-sky --run-dir outputs/builds/20261110_083134_011934_rothenburg` で、最後に採用した形状と建物保護を引き継いで明示的に再検査し、元を残した初期Blenderの修正版を作れます。単体では `sky-residuals "清掃フォルダ" --recheck --until-clear` を使います。設定と停止条件は[蓋除去と消灯](SKY_CLEANUP.md)を参照してください。
 
 新規作成する初期シーンではOptiX、CUDA、HIP、Metal、oneAPIの順に利用可能なGPUを選びます。GPUを検出できなければCPUを選び、結果を`result.json`の`render_device`に記録します。このPCはRTX 4060 TiをOptiXで利用します。
 

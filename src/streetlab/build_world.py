@@ -4,6 +4,7 @@ import hashlib
 from contextlib import contextmanager
 from datetime import date, datetime
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -120,6 +121,9 @@ def result_exists(folder):
         config=read(job_file)['config']
         if captured!=config.get('capture_enabled',True):
             return False
+        if captured and config.get('roads', {}).get('enabled') and (
+                not result.get('capture_plan') or not Path(result['capture_plan']).is_file()):
+            return False
         if config.get('inventory',{}).get('enabled') and (
                 not result.get('inventory_file') or not Path(result['inventory_file']).is_file()
                 or not result.get('inventory_blend') or not Path(result['inventory_blend']).is_file()):
@@ -218,7 +222,7 @@ def refine_existing_build(folder):
     checkpoint,prepared=cleanup_state(source)
     if prepared is None:raise ValueError('保存済みの清掃結果が見つかりません。')
     print('保存済みWorldの空を再清掃します。World APIは呼びません。',flush=True)
-    prepared=sky_residual_loop.run(prepared)
+    prepared=sky_residual_loop.run(prepared,recheck=True)
     revision=folder/'sky_revisions'/datetime.now().strftime('%Y%m%d_%H%M%S_%f')
     revision.mkdir(parents=True)
     request=read(folder/'initialize_request.json')
@@ -457,16 +461,25 @@ def main(argv=None):
     parser.add_argument('--run-dir', type=Path, help='一括実行の保存先を指定')
     parser.add_argument('--resume', action='store_true', help='最新の一括実行を再開。新規生成しない')
     parser.add_argument('--dry-run', action='store_true', help='設定表示のみ。APIも保存も行わない')
+    parser.add_argument('--lighting-minutes',type=float,help='--with-lighting-search の探索時間。省略時30分')
     mode=parser.add_mutually_exclusive_group()
     mode.add_argument('--initialize-only',action='store_true',help='道路探索・本撮影を省き、初期Blenderとカメラ位置の土台まで保存')
     mode.add_argument('--with-capture',action='store_true',help='道路探索と本撮影も実行。初期状態だけの既存世界にも追加できる')
+    mode.add_argument('--with-lighting-capture',action='store_true',
+                      help='初期Blenderから昼光比較を撮影。--resume時は撮影だけ実行')
+    mode.add_argument('--with-lighting-search', action='store_true',
+                      help='道路の本撮影後に照明設定の反復探索を実行')
     mode.add_argument('--refine-sky',action='store_true',help='既存世界の空を再清掃し、元を残して初期Blenderの修正版を作成')
     args = parser.parse_args(argv)
+    if args.lighting_minutes is not None and (not args.with_lighting_search or not math.isfinite(args.lighting_minutes) or args.lighting_minutes<=0):
+        parser.error('--lighting-minutes は --with-lighting-search と一緒に、0より大きい分数を指定してください。')
     if args.refine_sky and not args.resume:parser.error('--refine-skyには--resumeを指定してください。')
     config = read(ROOT / 'config/build_world.json')
-    requested_capture=False if args.initialize_only else True if args.with_capture else None
+    requested_capture=False if args.initialize_only else True if args.with_capture or args.with_lighting_search else None
     if requested_capture is not None:
         capture_mode(config,requested_capture)
+    if args.with_lighting_search:
+        config.setdefault('inventory', {})['enabled'] = True
     for key in ('place', 'country', 'date', 'time', 'fold', 'model'):
         if getattr(args, key) is not None:
             config[key] = getattr(args, key)
@@ -495,11 +508,16 @@ def main(argv=None):
         date.fromisoformat(config['date'])
         print(json.dumps({'config': config, 'prompt_file': str(prompt_file),
             'reuse_world_dir': str(world_dir) if world_dir else None,
-            'text_prompt': text, 'api_called': False}, ensure_ascii=False, indent=2))
+            'text_prompt': text, 'api_called': False, 'lighting_search': args.with_lighting_search},
+            ensure_ascii=False, indent=2))
         return
     if not args.resume and text is None:
         text=prompt_file.read_text(encoding='utf-8-sig').strip()
     folder = select_run(args.resume, args.run_dir,prompt_text=text)
+    if args.resume and args.with_lighting_capture:
+        from streetlab.lighting_capture import capture
+        capture([folder])
+        return folder
     with run_lock(folder):
         if not (folder / 'build.json').exists():
             if text is None:
@@ -518,17 +536,27 @@ def main(argv=None):
                 raise ValueError('別の世界の一括処理が途中です。--run-dirで別の新しい保存先を指定してください。')
             if requested_capture is not None:
                 capture_mode(saved,requested_capture)
+                if args.with_lighting_search:
+                    saved.setdefault('inventory', {})['enabled'] = True
                 save(folder/'build.json',saved_job)
             print('保存済みのプロンプト・地点・日時で再開します。', flush=True)
         print('一括実行の保存先:', folder, flush=True)
         with pinned_world_key():
             if args.refine_sky:return refine_existing_build(folder)
-            return execute(folder)
+            completed = execute(folder)
+        if args.with_lighting_capture:
+            from streetlab.lighting_capture import capture
+            capture([folder])
+        if args.with_lighting_search:
+            from streetlab.lighting_search import run_search
+            run_search(completed,minutes=args.lighting_minutes)
+        return completed
 
 
 if __name__ == '__main__':
     try:
         main()
-    except (RuntimeError, ValueError, OSError, sqlite3.Error) as exc:
+    except (RuntimeError, ValueError, OSError, sqlite3.Error, subprocess.CalledProcessError) as exc:
         print('停止:', str(exc), flush=True)
+        raise SystemExit(1) from None
         raise SystemExit(1)

@@ -3,7 +3,7 @@
 目的は「どこに何があるか」を記録し、後工程から同じ位置・範囲を使えるようにすることです。
 ライト・発光面・反射材質は追加しません。窓は暗い窓、反射している窓、室内光のある窓をすべて対象にします。
 
-現在は `python run.py build` からも既定でこの検出を呼びます。一括実行では `outputs/builds/日時/inventory/` に結果を保存し、`street_initial.blend` にEMPTYマーカーを読み込みます。太陽・空と検出結果を持つ初期状態まで自動実行し、本撮影は `--with-capture` を指定した場合だけ追加します。普段の手順は [実行メモ](../実行メモ.txt) を参照してください。
+現在は `python run.py build` からも既定でこの検出を呼びます。一括実行では `outputs/builds/日時/inventory/` に結果を保存し、`street_initial.blend` にEMPTYマーカーを読み込みます。太陽・空と検出結果を持つ初期状態まで自動実行します。道路探索と本撮影は `--with-capture`、保存済みの初期シーンからの昼光比較は `--with-lighting-capture` で追加できます。[撮影コマンドの使い方](COMMANDS_JA.md#初期blenderから昼光の比較だけを撮影) を参照してください。
 
 ```powershell
 python -X utf8 run.py map
@@ -34,6 +34,10 @@ python -X utf8 run.py map --continue-dir "outputs/scene_inventory/実行日時" 
 座標・幅・高さはBlenderのワールド単位です。信頼度をモデルが省略した場合は保守的な内部値0.7と `confidence_source` を記録します。中心座標が検出枠の外にある応答は枠の中点へ補正し、元の中心と補正理由も残します。
 後工程はID・種類・statusを参照できます。姿勢は表面の外向き法線に合わせます。
 太陽が画像に実際に見えた場合は方向情報だけを保存し、SUNライトや架空の3D位置を作りません。
+
+道路の本撮影の後、`--with-lighting-search` は夕方・明け方・夜にこの位置情報を読み、点灯する器具や窓、光量・色・取り付け位置を候補ごとに変えて撮影します。配置は全道路カメラで共通です。[照明探索の実行と再開](../README.md#本番の照明ループ)
+
+旧ループの `outputs/light_placement/実行日時` を `lighting-search --placement-run` に指定すると、同じ元シーンの最終配置から探索を続けられます。
 
 保存シーンは暗いままです。配置をBlenderで見るため、ビューポートの表示モードだけMaterial Previewに設定します。
 検出用の自発光設定は撮影用プロセスだけのもので、最終BLENDへ保存しません。

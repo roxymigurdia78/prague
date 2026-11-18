@@ -1,5 +1,6 @@
 """Local conversation JSON -> existing HPC extraction -> the complete world pipeline."""
 import argparse
+import math
 from datetime import datetime
 import json
 from pathlib import Path
@@ -71,18 +72,27 @@ def main(argv=None):
     parser.add_argument('--hpc-model',default=conversation.DEFAULT_MODEL)
     parser.add_argument('--env-file',type=Path)
     parser.add_argument('--model',choices=world.GENERATION_CREDITS)
+    parser.add_argument('--lighting-minutes',type=float,help='--with-lighting-search の探索時間。省略時30分')
     mode=parser.add_mutually_exclusive_group()
     mode.add_argument('--with-capture',action='store_true',help='道路探索と本撮影も追加')
+    mode.add_argument('--with-lighting-capture',action='store_true',
+                      help='会話で選んだ時間帯の昼光比較を初期Blenderから撮影')
+    mode.add_argument('--with-lighting-search', action='store_true',
+                      help='道路の本撮影後に照明設定の反復探索を実行')
     mode.add_argument('--initialize-only',action='store_true',help='本撮影を省き、初期Blenderと撮影位置の土台まで')
     args=parser.parse_args(argv)
+    if args.lighting_minutes is not None and (not args.with_lighting_search or not math.isfinite(args.lighting_minutes) or args.lighting_minutes<=0):
+        parser.error('--lighting-minutes は --with-lighting-search と一緒に、0より大きい分数を指定してください。')
+    if args.prompt_only and args.with_lighting_search:
+        parser.error('--prompt-only と --with-lighting-search は同時に使えません。')
     source=args.input.resolve()
     data=conversation.read_input(source)
     messages=conversation.normalize_conversation(data)
     if args.dry_run:
         config=build_world.read(ROOT/'config/build_world.json')
-        capture=True if args.with_capture else False if args.initialize_only else config.get('capture_enabled',False)
+        capture=True if args.with_capture or args.with_lighting_search else False if args.initialize_only else config.get('capture_enabled',False)
         print(json.dumps({'input':str(source),'messages':len(messages),'api_called':False,
-            'output_saved':False,'capture_enabled':capture},ensure_ascii=False,indent=2))
+            'output_saved':False,'capture_enabled':capture,'lighting_search':args.with_lighting_search},ensure_ascii=False,indent=2))
         return 0
     print('会話JSON:',source,flush=True)
     status=conversation.process(data,output=ROOT/'outputs/conversations',seed=args.seed,
@@ -105,7 +115,7 @@ def main(argv=None):
     if args.prompt_only:
         print('プロンプトの準備まで完了しました。World生成は行っていません。',flush=True)
         return 0
-    requested_capture=True if args.with_capture else False if args.initialize_only else None
+    requested_capture=True if args.with_capture or args.with_lighting_search else False if args.initialize_only else None
     # This second lock covers the durable handoff and complete build. The
     # extractor's own .processing lock remains compatible with the Mac receiver.
     with build_world.run_lock(directory):
@@ -114,10 +124,18 @@ def main(argv=None):
             if requested_capture is not None:
                 job=build_world.read(folder/'build.json')
                 build_world.capture_mode(job['config'],requested_capture)
+                if args.with_lighting_search:
+                    job['config'].setdefault('inventory', {})['enabled'] = True
                 build_world.save(folder/'build.json',job)
             print('一括実行の保存先:',folder,flush=True)
             with build_world.pinned_world_key():
                 build_world.execute(folder)
+            if args.with_lighting_capture:
+                from streetlab.lighting_capture import capture
+                capture([folder])
+            if args.with_lighting_search:
+                from streetlab.lighting_search import run_search
+                run_search(folder, env_file=args.env_file,minutes=args.lighting_minutes)
     return 0
 
 

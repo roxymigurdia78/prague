@@ -11,7 +11,7 @@ if __name__ == '__main__':
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from streetlab.atmosphere_mapping import initial_atmosphere
-from streetlab.sun_sky import OWNER, SkySettings, get_sky_settings, set_sky, set_sun
+from streetlab.sun_sky import BACKGROUND_NODE, OWNER, SkySettings, get_sky_settings, set_sky, set_sun
 
 
 DEFAULT_OUTPUT = Path(r'C:\relight\renders')
@@ -58,6 +58,21 @@ def _cameras(scene, camera_names, source):
     raise ValueError('Set an active camera or specify camera_names')
 
 
+def apply_capture_settings(scene, *, exposure, kelvin, tint=None, look=None):
+    view = scene.view_settings
+    for key, value in [('exposure', exposure), ('white_balance_temperature', kelvin),
+                       ('white_balance_tint', tint)]:
+        if key != 'exposure' and value is None:
+            continue
+        prop = view.bl_rna.properties[key]
+        if type(value) not in (int, float) or not prop.hard_min <= value <= prop.hard_max:
+            raise ValueError(f'{key} must be between {prop.hard_min} and {prop.hard_max}')
+        setattr(view, key, value)
+    view.use_white_balance = kelvin is not None
+    if look is not None:
+        view.look = look
+
+
 def render_views(settings=None, save_dir=DEFAULT_OUTPUT, *, camera_names=None):
     """Render the current Blender scene into a unique folder and return its JSON path.
 
@@ -75,6 +90,9 @@ def render_views(settings=None, save_dir=DEFAULT_OUTPUT, *, camera_names=None):
             options[key] = options.pop(label)
     exposure = options.pop('exposure', 0.0)
     kelvin = options.pop('white_balance_kelvin', None)
+    tint = options.pop('white_balance_tint', None)
+    look = options.pop('look', None)
+    world_strength = options.pop('world_strength', None)
     sky = options.pop('sky', {})
     default_sun = 'sun' not in options
     sun = options.pop('sun', {})
@@ -139,16 +157,17 @@ def render_views(settings=None, save_dir=DEFAULT_OUTPUT, *, camera_names=None):
             solar.pop('sky_settings')
         if sky:
             set_sky(scene, **sky)
+        if world_strength is not None:
+            if type(world_strength) not in (int, float) or not math.isfinite(world_strength) or world_strength < 0:
+                raise ValueError('world_strength must be a finite nonnegative number')
+            if not scene.world or not scene.world.get(OWNER):
+                raise ValueError('world_strength requires a managed sky')
+            if scene.world == original.world:
+                scene.world = original.world.copy()
+            scene.world.node_tree.nodes[BACKGROUND_NODE].inputs['Strength'].default_value = world_strength
 
+        apply_capture_settings(scene, exposure=exposure, kelvin=kelvin, tint=tint, look=look)
         view_settings = scene.view_settings
-        for key, value in [('exposure', exposure), ('white_balance_temperature', kelvin)]:
-            if key == 'white_balance_temperature' and value is None:
-                continue
-            prop = view_settings.bl_rna.properties[key]
-            if type(value) not in (int, float) or not prop.hard_min <= value <= prop.hard_max:
-                raise ValueError(f'{key} must be between {prop.hard_min} and {prop.hard_max}')
-            setattr(view_settings, key, value)
-        view_settings.use_white_balance = kelvin is not None
 
         render = scene.render
         render.engine = 'CYCLES'
@@ -222,6 +241,8 @@ def render_views(settings=None, save_dir=DEFAULT_OUTPUT, *, camera_names=None):
         if atmosphere is not None:
             atmosphere['applied'] = {name: manifest['sky'][name] for name in ('altitude', 'aerosols', 'ozone')}
             manifest['atmosphere_reference'] = atmosphere
+        if manifest['sky'] is not None:
+            manifest['world_strength'] = scene.world.node_tree.nodes[BACKGROUND_NODE].inputs['Strength'].default_value
         path = output / 'settings.json'
         path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False, allow_nan=False) + '\n',
                         encoding='utf-8')

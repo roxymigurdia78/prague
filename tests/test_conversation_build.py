@@ -114,6 +114,21 @@ class LocalConversationBuildTests(unittest.TestCase):
         config=build.read(first/'build.json')['config']
         self.assertTrue(config['capture_enabled']);self.assertTrue(config['roads']['enabled'])
 
+    def test_lighting_search_runs_after_the_road_capture(self):
+        calls = []
+
+        def capture(folder):
+            config = build.read(folder / 'build.json')['config']
+            self.assertTrue(config['capture_enabled'] and config['roads']['enabled'])
+            calls.append(('capture', folder))
+            return folder
+
+        with patch.object(local.conversation, 'process', return_value=self.status()), patch.object(
+                build, 'execute', side_effect=capture), patch('streetlab.lighting_search.run_search',
+                side_effect=lambda folder, **_: calls.append(('search', folder))):
+            self.assertEqual(self.invoke(['--with-lighting-search']), 0)
+        self.assertEqual(calls, [('capture', calls[0][1]), ('search', calls[0][1])])
+
     def test_changed_conversation_creates_a_separate_build_and_keeps_the_old_one(self):
         other=self.ready('b'*64)
         with patch.object(local.conversation,'process',side_effect=[self.status(),self.status(other)]),patch.object(build,'execute') as execute:
@@ -121,6 +136,17 @@ class LocalConversationBuildTests(unittest.TestCase):
             self.invoke();second=execute.call_args.args[0]
         self.assertNotEqual(first,second)
         self.assertTrue((first/'build.json').exists());self.assertTrue((second/'build.json').exists())
+
+    def test_conversation_forwards_the_requested_lighting_time(self):
+        with patch.object(local.conversation,'process',return_value=self.status()),patch.object(
+                build,'execute'),patch('streetlab.lighting_search.run_search') as search:
+            self.assertEqual(self.invoke(['--with-lighting-search','--lighting-minutes','120']),0)
+        self.assertEqual(search.call_args.kwargs['minutes'],120)
+
+    def test_lighting_time_without_the_search_flag_is_rejected_before_any_hpc_work(self):
+        with patch.object(local.conversation,'process') as process:
+            with self.assertRaises(SystemExit):self.invoke(['--lighting-minutes','120'])
+        process.assert_not_called()
 
 
 if __name__=='__main__':unittest.main()

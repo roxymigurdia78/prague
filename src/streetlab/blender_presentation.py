@@ -62,3 +62,36 @@ def configure_opening_view(scene, position=None):
                             space.region_3d.view_distance = 2
                             space.region_3d.view_location = Vector(position) + rotation @ Vector((0, 0, -2))
     scene['streetlab_detection_markers_hidden'] = True
+
+
+def configure_lighting_delivery(scene):
+    """Hide camera/marker guides while retaining illumination and render objects."""
+    import bpy
+    from mathutils import Vector
+
+    configure_opening_view(scene)
+    hidden = []
+    for obj in scene.objects:
+        if obj.type in ('CAMERA', 'EMPTY'):
+            for layer in scene.view_layers:
+                if obj.name in layer.objects:
+                    obj.hide_set(True, view_layer=layer)
+            hidden.append(obj.name)
+    # Hiding light objects themselves would also remove their illumination from
+    # the rendered viewport. Hide their editor outlines using overlays instead.
+    for screen in bpy.data.screens:
+        for area in screen.areas:
+            for space in area.spaces:
+                if space.type != 'VIEW_3D':
+                    continue
+                space.overlay.show_extras = False
+                space.overlay.show_relationship_lines = False
+                if scene.camera and space.region_3d:
+                    camera = scene.camera.matrix_world
+                    rotation = camera.to_quaternion()
+                    space.region_3d.view_perspective = 'PERSP'
+                    space.region_3d.view_rotation = rotation
+                    space.region_3d.view_distance = 2
+                    space.region_3d.view_location = camera.translation + rotation @ Vector((0, 0, -2))
+    scene['streetlab_lighting_guides_hidden'] = True
+    return {'hidden_objects': hidden, 'extras_overlay': False}

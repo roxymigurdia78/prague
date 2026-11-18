@@ -58,5 +58,17 @@ class SkyOpeningTests(unittest.TestCase):
             self.assertFalse(result['excessive'])
             self.assertTrue(Path(result['mask_files']['v']).exists())
 
+    def test_focused_opening_can_supply_missing_evidence_while_preserving_facades(self):
+        parent=ROOT/'scratch/tests/sky_opening';parent.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=parent) as temp:
+            folder=Path(temp);rgb=self.scene()
+            Image.fromarray(rgb).save(folder/'v_after.png');Image.fromarray(rgb).save(folder/'v.png')
+            result=measure(folder,{'views':[{'id':'v','polygons':[], 'focused_polygons':self.polygon()}]},
+                           reference_folder=folder,masks_folder=folder/'masks')
+            self.assertGreater(result['proposal_pixels'],10000)
+            with Image.open(result['mask_files']['v']) as image:mask=np.asarray(image)>0
+            self.assertFalse(mask[:,:60].any())
+            self.assertFalse(mask[72:98,65:83].any())
+
 
 if __name__=='__main__':unittest.main()

@@ -206,6 +206,13 @@ class BuildTests(unittest.TestCase):
         build.save(folder/'result.json',{'initial_blend':str(original),'capture_enabled':True})
         checkpoint=folder/'checkpoint';checkpoint.mkdir();prepared=folder/'repaired';prepared.mkdir()
         build.save(checkpoint/'preparation.json',{'status':'complete','polished':str(prepared)})
+        before_result=(folder/'result.json').read_bytes()
+        with patch.object(build,'cleanup_state',return_value=(checkpoint,prepared)),patch.object(
+                sky_residual_loop,'run',side_effect=sky_residual_loop.SkyCleanupIncomplete('not clear')),patch.object(
+                build.subprocess,'run') as initialize_blocked:
+            with self.assertRaises(sky_residual_loop.SkyCleanupIncomplete):build.refine_existing_build(folder)
+        initialize_blocked.assert_not_called()
+        self.assertEqual((folder/'result.json').read_bytes(),before_result)
         def initialize(command,**_kwargs):
             request=build.read(command[-1]);output=Path(request['output'])
             self.assertFalse(request['capture_enabled']);self.assertNotIn('capture_plan',request)
@@ -214,12 +221,13 @@ class BuildTests(unittest.TestCase):
                 'capture_enabled':False,'views':[],'camera_plan_views':[]})
             return SimpleNamespace(returncode=0)
         with patch.object(build,'cleanup_state',return_value=(checkpoint,prepared)), \
-             patch.object(sky_residual_loop,'run',return_value=prepared), \
+             patch.object(sky_residual_loop,'run',return_value=prepared) as residual, \
              patch.object(sky_residual_loop,'summary',return_value=None), \
              patch.object(build.subprocess,'run',side_effect=initialize), \
              patch.object(build,'show_result'),patch.object(build.world,'api') as api, \
              patch.object(build.world,'main') as paid:
             build.refine_existing_build(folder)
+        residual.assert_called_once_with(prepared,recheck=True)
         api.assert_not_called();paid.assert_not_called()
         self.assertEqual(original.read_bytes(),b'original street')
         result=build.read(folder/'result.json')
@@ -238,6 +246,8 @@ class BuildTests(unittest.TestCase):
         self.assertFalse(build.result_exists(folder))
         (folder / 'view.png').write_bytes(b'fixture')
         self.assertTrue(build.result_exists(folder))
+        build.save(folder / 'build.json', {'config': {'capture_enabled': True, 'roads': {'enabled': True}}})
+        self.assertFalse(build.result_exists(folder))
 
     def test_initial_only_completion_needs_no_photos_but_does_not_skip_requested_capture(self):
         folder=self.root
@@ -252,6 +262,17 @@ class BuildTests(unittest.TestCase):
         self.assertFalse((folder/'renders').exists())
         build.save(folder/'build.json',{'config':{'capture_enabled':True}})
         self.assertFalse(build.result_exists(folder))
+
+    def test_build_forwards_the_requested_lighting_time_without_running_the_search(self):
+        (self.root/'config').mkdir()
+        build.save(self.root/'config/build_world.json',{'prompt_file':'unused.txt'})
+        folder=self.root/'timed-build';folder.mkdir()
+        build.save(folder/'build.json',{'status':'complete','config':{'world_dir':'original_world',
+                    'capture_enabled':True,'roads':{'enabled':True}}})
+        with patch.object(build,'execute',return_value=folder),patch(
+                'streetlab.lighting_search.run_search') as search,redirect_stdout(io.StringIO()):
+            build.main(['--resume','--run-dir',str(folder),'--with-lighting-search','--lighting-minutes','90'])
+        search.assert_called_once_with(folder,minutes=90)
 
     def test_resume_can_change_capture_mode_without_changing_the_saved_world(self):
         (self.root/'config').mkdir()

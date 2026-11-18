@@ -1,5 +1,7 @@
 {
-  "max_rounds": 6,
+  "max_rounds": null,
   "stable_rounds": 2,
-  "small_face_fraction": 0.0005
+  "small_face_fraction": 0.0005,
+  "require_clear": true,
+  "max_stalled_rechecks": 3
 }

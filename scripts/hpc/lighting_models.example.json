@@ -1,0 +1,15 @@
+{
+  "default_model": "a_all",
+  "models": {
+    "a_all": {
+      "base_model": "~/light_eval/models/qwen3.8-27b",
+      "adapter": "~/light_eval/outputs/aachen_test2_pair_v1/A_all/adapter",
+      "long_edge": 768
+    },
+    "a_match": {
+      "base_model": "~/light_eval/models/qwen3.8-27b",
+      "adapter": "~/light_eval/outputs/aachen_test2_pair_v1/A_match/adapter",
+      "long_edge": 768
+    }
+  }
+}
